@@ -3,7 +3,13 @@ import { Pool } from "pg";
 import type { MemoryDB } from "better-auth/adapters/memory";
 import { betterAuth } from "better-auth";
 import { authOptions, type Auth } from "./auth";
-import { canSendEmail, capturedMail, smtpSettings } from "./mail";
+import {
+  EMAIL_ACTION_CLOSED_MESSAGE,
+  SIGNUP_CLOSED_MESSAGE,
+  canSendEmail,
+  capturedMail,
+  productionStartupError,
+} from "./mail";
 import { ensureAuthTables } from "./schema";
 import { memoryWorkspace, postgresWorkspace, type Member, type WorkspaceStore } from "./workspace";
 import type { User } from "../src/types";
@@ -30,6 +36,20 @@ export async function createApp(options: AppOptions = {}) {
   const workspace: WorkspaceStore = pool ? postgresWorkspace(pool) : memoryWorkspace(database.memory ?? {});
   const app = new Hono();
 
+  app.get("/api/email-delivery", (c) => c.json({ available: canSendEmail() }));
+
+  app.post("/api/auth/sign-up/email", async (c) => {
+    if (!canSendEmail()) return c.json({ message: SIGNUP_CLOSED_MESSAGE }, 503);
+    return auth.handler(c.req.raw);
+  });
+  app.post("/api/auth/send-verification-email", async (c) => {
+    if (!canSendEmail()) return c.json({ message: EMAIL_ACTION_CLOSED_MESSAGE }, 503);
+    return auth.handler(c.req.raw);
+  });
+  app.post("/api/auth/request-password-reset", async (c) => {
+    if (!canSendEmail()) return c.json({ message: EMAIL_ACTION_CLOSED_MESSAGE }, 503);
+    return auth.handler(c.req.raw);
+  });
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
   app.get("/api/workspace", async (c) => {
@@ -84,12 +104,8 @@ async function requireSession(auth: Auth, headers: Headers) {
 }
 
 export async function createListeningApp() {
-  if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL is required in production");
-  }
-  if (process.env.NODE_ENV === "production" && !smtpSettings()) {
-    throw new Error("SMTP_HOST, SMTP_PORT=465, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM are required in production");
-  }
+  const startupError = productionStartupError();
+  if (startupError) throw new Error(startupError);
   if (!process.env.DATABASE_URL) {
     return createApp({ memory: {} });
   }

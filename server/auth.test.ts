@@ -108,7 +108,7 @@ describe("shared workspace auth", () => {
     });
     expect(blocked.status).toBe(503);
     const body = (await blocked.json()) as { message?: string };
-    expect(body.message).toMatch(/not configured/i);
+    expect(body.message).toBe("New accounts cannot be created while email delivery is unavailable.");
     expect(capturedMail()).toHaveLength(0);
   });
 

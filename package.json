@@ -8,6 +8,7 @@
     "dev:server": "tsx --env-file=.env server/index.ts",
     "build": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json && vite build",
     "start": "tsx server/index.ts",
+    "provision": "tsx server/provision.ts",
     "preview": "vite preview",
     "test": "vitest run"
   },

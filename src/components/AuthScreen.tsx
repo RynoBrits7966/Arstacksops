@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { authClient, authError } from "../auth/client";
 
 type Mode = "sign-in" | "sign-up" | "forgot" | "reset" | "resend";
+
+const SIGNUP_CLOSED = "New accounts cannot be created while email delivery is unavailable.";
+const EMAIL_CLOSED = "Email delivery is unavailable, so a confirmation or reset link cannot be sent.";
 
 function unverified(message: string | null): boolean {
   return /email not verified/i.test(message ?? "");
@@ -23,6 +26,22 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(notice);
   const [pending, setPending] = useState(false);
+  const [emailAvailable, setEmailAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancel = false;
+    fetch("/api/email-delivery")
+      .then((response) => response.json())
+      .then((body: { available?: boolean }) => {
+        if (!cancel) setEmailAvailable(body.available === true);
+      })
+      .catch(() => {
+        if (!cancel) setEmailAvailable(null);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, []);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -34,6 +53,14 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
     }
     if ((mode === "sign-up" || mode === "reset") && password !== confirm) {
       setError("Those passwords do not match.");
+      return;
+    }
+    if (emailAvailable === false && mode === "sign-up") {
+      setError(SIGNUP_CLOSED);
+      return;
+    }
+    if (emailAvailable === false && (mode === "forgot" || mode === "resend")) {
+      setError(EMAIL_CLOSED);
       return;
     }
     setPending(true);
@@ -133,6 +160,9 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
         <img src="/ar-mark.png" alt="" />
         <h1>ARStacksOps</h1>
         <p className="muted">{title}</p>
+        {emailAvailable === false ? (
+          <p className="auth-note">Email delivery is unavailable. New accounts are closed, and confirmation or reset links cannot be sent.</p>
+        ) : null}
         {message ? <p className="auth-note">{message}</p> : null}
         {error ? <p className="form-error">{error}</p> : null}
         {mode === "sign-up" ? (
@@ -183,9 +213,11 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
         <div className="auth-links">
           {mode === "sign-in" ? (
             <>
-              <button className="quiet" type="button" onClick={() => { setMode("sign-up"); setError(null); }}>
-                Create account
-              </button>
+              {emailAvailable === false ? null : (
+                <button className="quiet" type="button" onClick={() => { setMode("sign-up"); setError(null); }}>
+                  Create account
+                </button>
+              )}
               <button className="quiet" type="button" onClick={() => { setMode("forgot"); setError(null); }}>
                 Forgot password
               </button>

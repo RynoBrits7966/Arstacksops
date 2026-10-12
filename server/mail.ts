@@ -32,17 +32,42 @@ export function smtpSettings(): SmtpSettings | null {
   return { host, port, user, password, from };
 }
 
+export const SIGNUP_CLOSED_MESSAGE = "New accounts cannot be created while email delivery is unavailable.";
+export const EMAIL_ACTION_CLOSED_MESSAGE = "Email delivery is unavailable, so a confirmation or reset link cannot be sent.";
+
+/** Explicit off. Wins over SMTP settings and the local test mailbox. */
+export function emailDeliveryDisabled(): boolean {
+  return process.env.EMAIL_DELIVERY === "off";
+}
+
 /** In-memory mailbox for automated tests. Never treated as delivery in production. */
 export function usingTestMailbox(): boolean {
   return process.env.NODE_ENV !== "production" && process.env.EMAIL_DELIVERY === "test";
 }
 
 export function canSendEmail(): boolean {
+  if (emailDeliveryDisabled()) return false;
   if (usingTestMailbox()) return true;
   return smtpSettings() !== null;
 }
 
+/**
+ * Production may start without SMTP only when email delivery is explicitly off.
+ * The test mailbox never counts as production delivery.
+ */
+export function productionStartupError(): string | null {
+  if (process.env.NODE_ENV !== "production") return null;
+  if (!process.env.DATABASE_URL) return "DATABASE_URL is required in production";
+  if (!emailDeliveryDisabled() && !smtpSettings()) {
+    return "SMTP_HOST, SMTP_PORT=465, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM are required in production";
+  }
+  return null;
+}
+
 export async function deliverAuthEmail(mail: OutboundMail): Promise<void> {
+  if (emailDeliveryDisabled()) {
+    throw new Error(EMAIL_ACTION_CLOSED_MESSAGE);
+  }
   if (usingTestMailbox()) {
     captured.push(mail);
     return;

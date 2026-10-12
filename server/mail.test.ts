@@ -7,9 +7,9 @@ vi.mock("nodemailer", () => ({
   default: { createTransport },
 }));
 
-import { canSendEmail, capturedMail, clearMailbox, deliverAuthEmail, sanitizeSmtpText, smtpFailureLine, smtpSuccessLine, smtpSettings, usingTestMailbox } from "./mail";
+import { EMAIL_ACTION_CLOSED_MESSAGE, canSendEmail, capturedMail, clearMailbox, deliverAuthEmail, emailDeliveryDisabled, productionStartupError, sanitizeSmtpText, smtpFailureLine, smtpSuccessLine, smtpSettings, usingTestMailbox } from "./mail";
 
-const smtpKeys = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "EMAIL_DELIVERY", "NODE_ENV"] as const;
+const smtpKeys = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "EMAIL_DELIVERY", "NODE_ENV", "DATABASE_URL"] as const;
 
 describe("SMTP delivery", () => {
   const previous = Object.fromEntries(smtpKeys.map((key) => [key, process.env[key]]));
@@ -175,6 +175,41 @@ describe("SMTP delivery", () => {
     expect(sanitizeSmtpText("see https://arstacksops-production.up.railway.app/api/auth/verify-email?token=secret-token")).toBe(
       "see [url]",
     );
+  });
+
+  it("treats an explicit off switch as closed even when SMTP settings are present", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.EMAIL_DELIVERY = "off";
+    process.env.DATABASE_URL = "postgres://example";
+    process.env.SMTP_HOST = "mail.arstacks.co.za";
+    process.env.SMTP_PORT = "465";
+    process.env.SMTP_USER = "barend@arstacks.co.za";
+    process.env.SMTP_PASSWORD = "test-only-not-a-mailbox-password";
+    process.env.SMTP_FROM = "barend@arstacks.co.za";
+    expect(emailDeliveryDisabled()).toBe(true);
+    expect(canSendEmail()).toBe(false);
+    expect(productionStartupError()).toBeNull();
+    await expect(
+      deliverAuthEmail({
+        to: "andrew@arstacks.co.za",
+        subject: "Confirm your ARStacksOps account",
+        url: "https://example.test/verify",
+        text: "Confirm your account",
+      }),
+    ).rejects.toThrow(EMAIL_ACTION_CLOSED_MESSAGE);
+    expect(createTransport).not.toHaveBeenCalled();
+  });
+
+  it("still requires SMTP in production when delivery is not explicitly off", () => {
+    process.env.NODE_ENV = "production";
+    process.env.EMAIL_DELIVERY = "";
+    process.env.DATABASE_URL = "postgres://example";
+    delete process.env.SMTP_PASSWORD;
+    expect(productionStartupError()).toMatch(/SMTP_HOST/);
+    delete process.env.DATABASE_URL;
+    expect(productionStartupError()).toMatch(/DATABASE_URL/);
+    process.env.NODE_ENV = "test";
+    expect(productionStartupError()).toBeNull();
   });
 
   it("does not treat the test mailbox as delivery in production", () => {

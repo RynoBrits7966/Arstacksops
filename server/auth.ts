@@ -2,7 +2,9 @@ import { betterAuth, APIError, type BetterAuthOptions } from "better-auth";
 import { memoryAdapter, type MemoryDB } from "better-auth/adapters/memory";
 import type { Pool } from "pg";
 import { isAllowlisted } from "./allowlist";
-import { canSendEmail, deliverAuthEmail } from "./mail";
+import { EMAIL_ACTION_CLOSED_MESSAGE, SIGNUP_CLOSED_MESSAGE, canSendEmail, deliverAuthEmail } from "./mail";
+import { provisioningActive } from "./provision-flag";
+import { isProvisionStaff } from "./staff";
 
 export type AuthDatabase = { pool: Pool } | { memory: MemoryDB };
 
@@ -42,6 +44,9 @@ export function authOptions(database: AuthDatabase): BetterAuthOptions {
       autoSignIn: false,
       minPasswordLength: 8,
       sendResetPassword: async ({ user, url }) => {
+        if (!canSendEmail()) {
+          throw new APIError("SERVICE_UNAVAILABLE", { message: EMAIL_ACTION_CLOSED_MESSAGE });
+        }
         await deliverAuthEmail({
           to: user.email,
           subject: "Reset your ARStacksOps password",
@@ -55,6 +60,9 @@ export function authOptions(database: AuthDatabase): BetterAuthOptions {
       autoSignInAfterVerification: false,
       sendVerificationEmail: async ({ user, url }) => {
         if (!isAllowlisted(user.email)) return;
+        if (!canSendEmail()) {
+          throw new APIError("SERVICE_UNAVAILABLE", { message: EMAIL_ACTION_CLOSED_MESSAGE });
+        }
         await deliverAuthEmail({
           to: user.email,
           subject: "Confirm your ARStacksOps account",
@@ -71,10 +79,14 @@ export function authOptions(database: AuthDatabase): BetterAuthOptions {
             if (!isAllowlisted(email)) {
               throw new APIError("BAD_REQUEST", { message: "This email is not allowed to register." });
             }
+            if (provisioningActive()) {
+              if (!isProvisionStaff(email)) {
+                throw new APIError("BAD_REQUEST", { message: "This email is not approved for provisioning." });
+              }
+              return;
+            }
             if (!canSendEmail()) {
-              throw new APIError("SERVICE_UNAVAILABLE", {
-                message: "Email delivery is not configured, so new accounts cannot be verified yet.",
-              });
+              throw new APIError("SERVICE_UNAVAILABLE", { message: SIGNUP_CLOSED_MESSAGE });
             }
           },
         },

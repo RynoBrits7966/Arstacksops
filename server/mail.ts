@@ -63,6 +63,10 @@ export async function deliverAuthEmail(mail: OutboundMail): Promise<void> {
       rejectUnauthorized: true,
       servername: smtp.host,
     },
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    logger: false,
+    debug: false,
   });
   try {
     await transport.sendMail({
@@ -71,9 +75,35 @@ export async function deliverAuthEmail(mail: OutboundMail): Promise<void> {
       subject: mail.subject,
       text: mail.text,
     });
-  } catch {
+  } catch (error) {
+    console.error(smtpFailureLine(error));
     throw new Error("The message could not be sent.");
   }
+}
+
+/** Safe SMTP diagnostics. Omits passwords, URLs, tokens, and message bodies. */
+export function smtpFailureLine(error: unknown): string {
+  const record = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : {};
+  const code = typeof record.code === "string" && record.code ? record.code : "unknown";
+  const responseCode = typeof record.responseCode === "number" ? String(record.responseCode) : "none";
+  const command = smtpCommand(record.command);
+  const detail = typeof record.response === "string" ? record.response : typeof record.message === "string" ? record.message : "";
+  return `smtp send failed code=${code} responseCode=${responseCode} command=${command} message=${sanitizeSmtpText(detail) || "none"}`;
+}
+
+function smtpCommand(value: unknown): string {
+  if (typeof value !== "string") return "none";
+  const word = value.trim().split(/\s+/)[0] ?? "";
+  return /^[A-Za-z]+$/.test(word) ? word.toUpperCase() : "none";
+}
+
+export function sanitizeSmtpText(value: string): string {
+  const password = process.env.SMTP_PASSWORD ?? "";
+  let text = value.replace(/[\r\n]+/g, " ");
+  text = text.replace(/https?:\/\/\S+/gi, "[url]");
+  text = text.replace(/([?&](?:token|callbackURL)=)[^&\s]+/gi, "$1[redacted]");
+  if (password) text = text.split(password).join("[redacted]");
+  return text.slice(0, 300);
 }
 
 export function capturedMail(): OutboundMail[] {

@@ -1,24 +1,37 @@
-import { betterAuth, APIError } from "better-auth";
+import { betterAuth, APIError, type BetterAuthOptions } from "better-auth";
 import { memoryAdapter, type MemoryDB } from "better-auth/adapters/memory";
 import type { Pool } from "pg";
 import { isAllowlisted } from "./allowlist";
 import { canSendEmail, deliverAuthEmail } from "./mail";
 
+export type AuthDatabase = { pool: Pool } | { memory: MemoryDB };
+
 export function authBaseURL(): string {
   return process.env.BETTER_AUTH_URL || "http://localhost:5173";
 }
 
-export function createAuth(database: { pool: Pool } | { memory: MemoryDB }) {
+/**
+ * Railway's public edge overwrites X-Real-IP with the connecting client.
+ * X-Forwarded-For is not a stable single hop, so it is not trusted.
+ */
+export const CLIENT_IP_HEADERS = ["x-real-ip"];
+
+export function authOptions(database: AuthDatabase): BetterAuthOptions {
   const secret = process.env.BETTER_AUTH_SECRET || "dev-only-secret-change-me";
   if (process.env.NODE_ENV === "production" && !process.env.BETTER_AUTH_SECRET) {
     throw new Error("BETTER_AUTH_SECRET is required in production");
   }
-  return betterAuth({
+  return {
     appName: "ARStacksOps",
     baseURL: authBaseURL(),
     secret,
     trustedOrigins: [authBaseURL()],
     database: "pool" in database ? database.pool : memoryAdapter(database.memory),
+    advanced: {
+      ipAddress: {
+        ipAddressHeaders: CLIENT_IP_HEADERS,
+      },
+    },
     telemetry: { enabled: false },
     rateLimit: {
       enabled: process.env.NODE_ENV === "production",
@@ -77,7 +90,11 @@ export function createAuth(database: { pool: Pool } | { memory: MemoryDB }) {
         },
       },
     },
-  });
+  };
+}
+
+export function createAuth(database: AuthDatabase) {
+  return betterAuth(authOptions(database));
 }
 
 export type Auth = ReturnType<typeof createAuth>;

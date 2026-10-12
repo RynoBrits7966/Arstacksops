@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MemoryDB } from "better-auth/adapters/memory";
 import { verifyPassword } from "better-auth/crypto";
 import { emptySnapshot } from "../src/storage/snapshot";
+import { createAuth } from "./auth";
 import { createApp } from "./app";
 import { clearMailbox, capturedMail } from "./mail";
+import { missingAuthTables } from "./schema";
 
 const origin = "http://localhost:5173";
 
@@ -78,6 +80,14 @@ describe("shared workspace auth", () => {
       else process.env[key] = value;
     }
     clearMailbox();
+  });
+
+  it("reads the client address from X-Real-IP only", () => {
+    const auth = createAuth({ memory: {} });
+    expect(auth.options.advanced?.ipAddress?.ipAddressHeaders).toEqual(["x-real-ip"]);
+    expect(auth.options.advanced && "trustedProxyHeaders" in auth.options.advanced).toBe(false);
+    expect(missingAuthTables(["user", "session"])).toEqual(["account", "verification"]);
+    expect(missingAuthTables(["user", "session", "account", "verification"])).toEqual([]);
   });
 
   it("rejects people who are not on the allowlist and blocks sign-up when email is not configured", async () => {

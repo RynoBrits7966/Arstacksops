@@ -1,9 +1,10 @@
 import { Hono } from "hono";
-import { getMigrations } from "better-auth/db/migration";
 import { Pool } from "pg";
 import type { MemoryDB } from "better-auth/adapters/memory";
-import { createAuth, type Auth } from "./auth";
+import { betterAuth } from "better-auth";
+import { authOptions, type Auth } from "./auth";
 import { canSendEmail, capturedMail, smtpSettings } from "./mail";
+import { ensureAuthTables } from "./schema";
 import { memoryWorkspace, postgresWorkspace, type Member, type WorkspaceStore } from "./workspace";
 import type { User } from "../src/types";
 
@@ -19,10 +20,12 @@ export async function createApp(options: AppOptions = {}) {
     throw new Error("DATABASE_URL is required in production");
   }
   const database = pool ? { pool } : { memory: memory ?? {} };
-  const auth = createAuth(database);
+  const authConfig = authOptions(database);
+  if (pool) await ensureAuthTables(pool, authConfig);
+  const auth = betterAuth(authConfig);
   if (pool) {
-    const plan = await getMigrations(auth.options);
-    await plan.runMigrations();
+    const ctx = await auth.$context;
+    if (ctx.checkSchema) await ctx.checkSchema();
   }
   const workspace: WorkspaceStore = pool ? postgresWorkspace(pool) : memoryWorkspace(database.memory ?? {});
   const app = new Hono();

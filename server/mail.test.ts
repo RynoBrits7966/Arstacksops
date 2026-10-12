@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const sendMail = vi.hoisted(() => vi.fn(async () => ({ messageId: "mock-id" })));
+const sendMail = vi.hoisted(() => vi.fn(async (): Promise<{ messageId: string; response?: string }> => ({ messageId: "mock-id" })));
 const createTransport = vi.hoisted(() => vi.fn(() => ({ sendMail })));
 
 vi.mock("nodemailer", () => ({
   default: { createTransport },
 }));
 
-import { canSendEmail, capturedMail, clearMailbox, deliverAuthEmail, sanitizeSmtpText, smtpFailureLine, smtpSettings, usingTestMailbox } from "./mail";
+import { canSendEmail, capturedMail, clearMailbox, deliverAuthEmail, sanitizeSmtpText, smtpFailureLine, smtpSuccessLine, smtpSettings, usingTestMailbox } from "./mail";
 
 const smtpKeys = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "EMAIL_DELIVERY", "NODE_ENV"] as const;
 
@@ -57,12 +57,32 @@ describe("SMTP delivery", () => {
     process.env.SMTP_PASSWORD = "test-only-not-a-mailbox-password";
     process.env.SMTP_FROM = "barend@arstacks.co.za";
 
-    await deliverAuthEmail({
-      to: "andrew@arstacks.co.za",
-      subject: "Confirm your ARStacksOps account",
-      url: "https://app.example/api/auth/verify-email?token=abc",
-      text: "Confirm your account: https://app.example/api/auth/verify-email?token=abc",
+    sendMail.mockResolvedValueOnce({
+      messageId: "mock-id",
+      response: "250 OK https://app.example/api/auth/verify-email?token=abc test-only-not-a-mailbox-password",
     });
+    const notes: unknown[][] = [];
+    const original = console.info;
+    console.info = (...args: unknown[]) => {
+      notes.push(args);
+    };
+    try {
+      await deliverAuthEmail({
+        to: "andrew@arstacks.co.za",
+        subject: "Confirm your ARStacksOps account",
+        url: "https://app.example/api/auth/verify-email?token=abc",
+        text: "Confirm your account: https://app.example/api/auth/verify-email?token=abc",
+      });
+    } finally {
+      console.info = original;
+    }
+    const line = String(notes[0]?.[0] ?? "");
+    expect(line).toBe(smtpSuccessLine({
+      response: "250 OK https://app.example/api/auth/verify-email?token=abc test-only-not-a-mailbox-password",
+    }));
+    expect(line).not.toContain("token=abc");
+    expect(line).not.toContain("test-only-not-a-mailbox-password");
+    expect(line).not.toContain("Confirm your account");
 
     expect(createTransport).toHaveBeenCalledWith({
       host: "mail.arstacks.co.za",

@@ -2,7 +2,11 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { authClient, authError } from "../auth/client";
 
-type Mode = "sign-in" | "sign-up" | "forgot" | "reset";
+type Mode = "sign-in" | "sign-up" | "forgot" | "reset" | "resend";
+
+function unverified(message: string | null): boolean {
+  return /email not verified/i.test(message ?? "");
+}
 
 interface AuthScreenProps {
   notice: string | null;
@@ -24,7 +28,7 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
     event.preventDefault();
     setError(null);
     setMessage(null);
-    if (mode !== "forgot" && password.length < 8) {
+    if (mode !== "forgot" && mode !== "resend" && password.length < 8) {
       setError("Use at least 8 characters for the password.");
       return;
     }
@@ -49,7 +53,20 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
         setMode("sign-in");
         setPassword("");
         setConfirm("");
-        setMessage("Check your email and confirm the account before signing in.");
+        setMessage("Account created. Confirm it before signing in. If the confirmation message does not arrive, resend it.");
+        return;
+      }
+      if (mode === "resend") {
+        const result = await authClient.sendVerificationEmail({
+          email: email.trim().toLowerCase(),
+          callbackURL: "/?verified=1",
+        });
+        const failed = authError(result);
+        if (failed) {
+          setError(failed);
+          return;
+        }
+        setMessage("If that address still needs confirmation, a new link has been requested.");
         return;
       }
       if (mode === "forgot") {
@@ -100,7 +117,15 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
   }
 
   const title =
-    mode === "sign-up" ? "Create account" : mode === "forgot" ? "Reset password" : mode === "reset" ? "Choose a new password" : "Sign in";
+    mode === "sign-up"
+      ? "Create account"
+      : mode === "forgot"
+        ? "Reset password"
+        : mode === "reset"
+          ? "Choose a new password"
+          : mode === "resend"
+            ? "Resend verification email"
+            : "Sign in";
 
   return (
     <main className="auth-screen">
@@ -128,7 +153,7 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
             />
           </label>
         ) : null}
-        {mode !== "forgot" ? (
+        {mode !== "forgot" && mode !== "resend" ? (
           <label>
             Password
             <input
@@ -164,6 +189,11 @@ export function AuthScreen({ notice, resetToken, onSignedIn }: AuthScreenProps) 
               <button className="quiet" type="button" onClick={() => { setMode("forgot"); setError(null); }}>
                 Forgot password
               </button>
+              {unverified(error) ? (
+                <button className="quiet" type="button" onClick={() => { setMode("resend"); setError(null); }}>
+                  Resend verification email
+                </button>
+              ) : null}
             </>
           ) : (
             <button className="quiet" type="button" onClick={() => { setMode("sign-in"); setError(null); }}>

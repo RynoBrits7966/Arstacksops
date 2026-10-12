@@ -129,6 +129,67 @@ describe("shared workspace auth", () => {
     expect(await verifyPassword({ hash: stored, password: "correct-horse" })).toBe(true);
   });
 
+  it("resends a confirmation link for an unverified account and stays quiet for other addresses", async () => {
+    const { app } = await createApp({ memory: {} });
+    const signedUp = await post(app, "/api/auth/sign-up/email", {
+      name: "One Member",
+      email: "one@arstacks.test",
+      password: "correct-horse",
+      callbackURL: "/?verified=1",
+    });
+    expect(signedUp.status).toBe(200);
+    const blocked = await post(app, "/api/auth/sign-in/email", {
+      email: "one@arstacks.test",
+      password: "correct-horse",
+    });
+    expect(blocked.status).toBe(403);
+    expect(await blocked.json()).toMatchObject({ message: "Email not verified" });
+
+    clearMailbox();
+    const resent = await post(app, "/api/auth/send-verification-email", {
+      email: "one@arstacks.test",
+      callbackURL: "/?verified=1",
+    });
+    expect(resent.status).toBe(200);
+    expect(await resent.json()).toMatchObject({ status: true });
+    expect(capturedMail()).toHaveLength(1);
+    await verifyLatest(app);
+    const signedIn = await post(app, "/api/auth/sign-in/email", {
+      email: "one@arstacks.test",
+      password: "correct-horse",
+    });
+    expect(signedIn.status).toBe(200);
+
+    clearMailbox();
+    const already = await post(app, "/api/auth/send-verification-email", {
+      email: "one@arstacks.test",
+      callbackURL: "/?verified=1",
+    });
+    expect(already.status).toBe(200);
+    const missing = await post(app, "/api/auth/send-verification-email", {
+      email: "missing@arstacks.test",
+      callbackURL: "/?verified=1",
+    });
+    expect(missing.status).toBe(200);
+    expect(capturedMail()).toHaveLength(0);
+
+    const second = await post(app, "/api/auth/sign-up/email", {
+      name: "Two Member",
+      email: "two@arstacks.test",
+      password: "correct-horse",
+      callbackURL: "/?verified=1",
+    });
+    expect(second.status).toBe(200);
+    clearMailbox();
+    process.env.SIGNUP_ALLOWLIST = "one@arstacks.test";
+    const hidden = await post(app, "/api/auth/send-verification-email", {
+      email: "two@arstacks.test",
+      callbackURL: "/?verified=1",
+    });
+    expect(hidden.status).toBe(200);
+    expect(capturedMail()).toHaveLength(0);
+  });
+
   it("requires verification, then shares one empty board between the two members", async () => {
     const { app } = await createApp({ memory: {} });
     const locked = await app.request("/api/workspace");

@@ -69,12 +69,13 @@ export async function deliverAuthEmail(mail: OutboundMail): Promise<void> {
     debug: false,
   });
   try {
-    await transport.sendMail({
+    const info = await transport.sendMail({
       from: smtp.from,
       to: mail.to,
       subject: mail.subject,
       text: mail.text,
     });
+    console.info(smtpSuccessLine(info));
   } catch (error) {
     console.error(smtpFailureLine(error));
     throw new Error("The message could not be sent.");
@@ -82,6 +83,11 @@ export async function deliverAuthEmail(mail: OutboundMail): Promise<void> {
 }
 
 /** Safe SMTP diagnostics. Omits passwords, URLs, tokens, and message bodies. */
+export function smtpSuccessLine(info: { response?: unknown }): string {
+  const response = typeof info.response === "string" ? sanitizeSmtpText(info.response) : "none";
+  return `smtp send ok response=${response || "none"}`;
+}
+
 export function smtpFailureLine(error: unknown): string {
   const record = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : {};
   const code = typeof record.code === "string" && record.code ? record.code : "unknown";

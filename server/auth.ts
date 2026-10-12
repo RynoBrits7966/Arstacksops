@@ -54,6 +54,7 @@ export function authOptions(database: AuthDatabase): BetterAuthOptions {
       sendOnSignUp: true,
       autoSignInAfterVerification: false,
       sendVerificationEmail: async ({ user, url }) => {
+        if (!isAllowlisted(user.email)) return;
         await deliverAuthEmail({
           to: user.email,
           subject: "Confirm your ARStacksOps account",

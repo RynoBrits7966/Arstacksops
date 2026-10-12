@@ -3,7 +3,6 @@ import { cleanPlatforms, formatTicketId, nextTicketNumber } from "../issues/keys
 import { isColorTaken } from "../projects";
 import { STATUS_LABELS } from "../statuses";
 import { latestWorkAt, archiveNeedsVisit, shouldArchive, statusAfterMove } from "./archive";
-import { mergeMockVolume } from "./mockVolume";
 import { readIndexedDb } from "./readIndexedDb";
 import {
   SNAPSHOT_VERSION,
@@ -108,41 +107,82 @@ export interface WorkItemPatch {
 let cache: Snapshot | null = null;
 let loading: Promise<void> | null = null;
 let recoveryError: Error | null = null;
+let remoteVersion = 0;
+let saveChain: Promise<void> = Promise.resolve();
+
+export class AuthRequiredError extends Error {
+  constructor() {
+    super("Sign in required");
+    this.name = "AuthRequiredError";
+  }
+}
+
+/** Drop the in-memory board so the next sign-in loads the shared workspace again. */
+export function closeWorkspace() {
+  cache = null;
+  loading = null;
+  remoteVersion = 0;
+  recoveryError = null;
+}
+
+function usesSharedWorkspace(): boolean {
+  return typeof window !== "undefined";
+}
 
 function keepFlatBackup(raw: string) {
   if (localStorage.getItem(FLAT_BACKUP_KEY)) return;
   localStorage.setItem(FLAT_BACKUP_KEY, raw);
 }
 
-function addMockIfNeeded(backupRaw: string | null) {
-  if (!cache || !mergeMockVolume(cache)) return;
-  try {
-    if (backupRaw) keepFlatBackup(backupRaw);
-    persist();
-  } catch {
-    cache = null;
-    throw new Error("Could not save the sample issues. Your previous data was left in place.");
-  }
-}
-
-function persist() {
+async function persist() {
   if (!cache) return;
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(cache));
-  } catch {
-    throw new Error("Could not save in this browser. The change was not stored. Browser storage may be full.");
+  if (!usesSharedWorkspace()) {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(cache));
+    } catch {
+      throw new Error("Could not save in this browser. The change was not stored. Browser storage may be full.");
+    }
+    return;
   }
+  const run = saveChain.then(() => saveSharedWorkspace());
+  saveChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  await run;
 }
 
-function commit<T>(change: (draft: Snapshot) => T): T {
+async function saveSharedWorkspace() {
+  if (!cache) return;
+  const response = await fetch("/api/workspace", {
+    method: "PUT",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: remoteVersion, snapshot: cache }),
+  });
+  if (response.status === 401) throw new AuthRequiredError();
+  if (response.status === 409) {
+    throw new Error("Someone else updated the board. Reload the page and try again.");
+  }
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? "Could not save the shared board. The change was not stored.");
+  }
+  const saved = (await response.json()) as { version: number };
+  remoteVersion = saved.version;
+}
+
+async function commit<T>(change: (draft: Snapshot) => T): Promise<T> {
   if (!cache) throw new Error("Browser storage is not open");
   const previous = structuredClone(cache);
+  const previousVersion = remoteVersion;
   try {
     const result = change(cache);
-    persist();
+    await persist();
     return result;
   } catch (error) {
     cache = previous;
+    remoteVersion = previousVersion;
     throw error;
   }
 }
@@ -210,8 +250,23 @@ async function backupFromIndexedDb(): Promise<Record<string, unknown> | null> {
   };
 }
 
+async function loadSharedWorkspace() {
+  const response = await fetch("/api/workspace", { credentials: "include" });
+  if (response.status === 401) throw new AuthRequiredError();
+  if (!response.ok) throw new Error("Could not load the shared board.");
+  const body = (await response.json()) as { version: number; snapshot: unknown };
+  const built = buildSnapshot(body.snapshot);
+  if (!built.ok) throw new Error(built.message);
+  cache = built.snapshot;
+  remoteVersion = body.version;
+}
+
 async function load() {
   if (recoveryError) throw recoveryError;
+  if (usesSharedWorkspace()) {
+    await loadSharedWorkspace();
+    return;
+  }
   let raw: string | null;
   try {
     raw = localStorage.getItem(STORE_KEY);
@@ -242,13 +297,12 @@ async function load() {
         );
       }
       try {
-        persist();
+        await persist();
       } catch {
         cache = null;
         throw new Error("Could not finish updating saved data in this browser. Your previous copy was left in place.");
       }
     }
-    addMockIfNeeded(raw);
     return;
   }
   const backup = await backupFromIndexedDb();
@@ -268,22 +322,20 @@ async function load() {
     }
     cache = built.snapshot;
     try {
-      persist();
+      await persist();
     } catch {
       cache = null;
       throw new Error("Could not save the updated data in this browser. Your previous data was left in place.");
     }
-    addMockIfNeeded(JSON.stringify(backup));
     return;
   }
   cache = emptySnapshot();
   try {
-    persist();
+    await persist();
   } catch {
     cache = null;
     throw new Error("Could not create browser storage for this app. Nothing was deleted.");
   }
-  addMockIfNeeded(null);
 }
 
 async function ensure() {

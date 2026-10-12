@@ -9,14 +9,13 @@ import {
   sortProjects,
 } from "../projects";
 import { taskStore } from "../storage/localStore";
-import type { Project, Task, User } from "../types";
+import type { Project, Task } from "../types";
 
 interface ProjectSidebarProps {
   projects: Project[];
   tasks: Task[];
-  users: User[];
-  currentUserId: string;
-  onUserChange: (userId: string) => void;
+  sessionName: string;
+  onSignOut: () => void;
   selectedId: string | "all";
   onSelect: (id: string | "all") => void;
   onChanged: () => Promise<void>;
@@ -25,9 +24,8 @@ interface ProjectSidebarProps {
 export function ProjectSidebar({
   projects,
   tasks,
-  users,
-  currentUserId,
-  onUserChange,
+  sessionName,
+  onSignOut,
   selectedId,
   onSelect,
   onChanged,
@@ -46,16 +44,12 @@ export function ProjectSidebar({
         </div>
       </div>
 
-      <label className="working-as">
-        Working as
-        <select value={currentUserId} onChange={(event) => onUserChange(event.target.value)}>
-          {users.map((user) => (
-            <option key={user.id} value={user.id}>
-              {user.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="signed-in">
+        <span>Signed in as {sessionName}</span>
+        <button className="quiet" type="button" onClick={onSignOut}>
+          Sign out
+        </button>
+      </div>
 
       <div className="side-head">
         <h2>Projects</h2>

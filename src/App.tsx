@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
+import { authClient, currentSession, type SignedInUser } from "./auth/client";
+import { AuthScreen } from "./components/AuthScreen";
 import { BacklogView } from "./components/BacklogView";
 import { IssueBoard } from "./components/IssueBoard";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { StatsPage } from "./components/StatsPage";
 import { unreadMentionIds } from "./mentions";
 import { compareDeadlinePriority } from "./projects";
-import { taskStore } from "./storage/localStore";
+import { AuthRequiredError, closeWorkspace, taskStore } from "./storage/localStore";
 import type { Comment, Project, Task, TaskStatus, User } from "./types";
 
-const CURRENT_USER_KEY = "arstacksops.currentUserId";
 const VIEW_KEY = "arstacksops.view";
 
 type WorkspaceView = "work" | "backlog" | "stats";
@@ -24,7 +25,7 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
-  const [currentUserId, setCurrentUserId] = useState("");
+  const [session, setSession] = useState<SignedInUser | null | undefined>(undefined);
   const [tab, setTab] = useState<TaskStatus>("new");
   const [projectFilter, setProjectFilter] = useState<string | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -46,21 +47,34 @@ export function App() {
     setProjects(nextProjects);
     setUsers(nextUsers);
     setComments(nextComments);
-    setCurrentUserId((current) => {
-      const stored = current || localStorage.getItem(CURRENT_USER_KEY) || "user-jordan";
-      const id = nextUsers.some((user) => user.id === stored) ? stored : (nextUsers[0]?.id ?? "");
-      if (id) localStorage.setItem(CURRENT_USER_KEY, id);
-      return id;
-    });
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    currentSession()
+      .then((user) => {
+        if (!cancelled) setSession(user);
+      })
+      .catch(() => {
+        if (!cancelled) setSession(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
     refresh()
       .catch((caught: unknown) => {
-        if (!cancelled) {
-          setError(caught instanceof Error ? caught.message : "Could not open browser storage");
+        if (cancelled) return;
+        if (caught instanceof AuthRequiredError) {
+          closeWorkspace();
+          setSession(null);
+          return;
         }
+        setError(caught instanceof Error ? caught.message : "Could not open the shared board");
       })
       .finally(() => {
         if (!cancelled) setReady(true);
@@ -68,7 +82,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [refresh, session]);
 
   const orderedTasks = [...tasks].sort((a, b) => {
     const deadlineOf = (task: Task) => projects.find((project) => project.id === task.projectId)?.deadline ?? null;
@@ -80,9 +94,17 @@ export function App() {
     comments.filter((comment) => unreadMentionIds(comment).length > 0).map((comment) => comment.taskId),
   );
 
-  function chooseUser(userId: string) {
-    localStorage.setItem(CURRENT_USER_KEY, userId);
-    setCurrentUserId(userId);
+  async function signOut() {
+    await authClient.signOut();
+    closeWorkspace();
+    setReady(false);
+    setTasks([]);
+    setProjects([]);
+    setUsers([]);
+    setComments([]);
+    setSelectedId(null);
+    setBacklogSelectedId(null);
+    setSession(null);
   }
 
   function chooseView(next: WorkspaceView) {
@@ -90,14 +112,34 @@ export function App() {
     setView(next);
   }
 
+  const params = new URLSearchParams(window.location.search);
+  const resetToken = params.get("token");
+  const notice = params.get("verified") === "1" ? "Email confirmed. Sign in to open the board." : null;
+  if (session === undefined) {
+    return <p className="empty auth-wait">Loading…</p>;
+  }
+  if (!session) {
+    return (
+      <AuthScreen
+        notice={notice}
+        resetToken={params.get("reset") === "1" ? resetToken : null}
+        onSignedIn={async () => {
+          const user = await currentSession();
+          setReady(false);
+          setError(null);
+          setSession(user);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <ProjectSidebar
         projects={projects}
         tasks={tasks}
-        users={users}
-        currentUserId={currentUserId}
-        onUserChange={chooseUser}
+        sessionName={session.name}
+        onSignOut={() => void signOut()}
         selectedId={projectFilter}
         onSelect={(id) => {
           setProjectFilter(id);
@@ -146,7 +188,7 @@ export function App() {
             projects={projects}
             users={users}
             comments={comments}
-            currentUserId={currentUserId}
+            currentUserId={session.id}
             projectFilter={projectFilter}
             tab={tab}
             selectedId={selectedId}
@@ -161,7 +203,7 @@ export function App() {
             tasks={tasks}
             projects={projects}
             users={users}
-            currentUserId={currentUserId}
+            currentUserId={session.id}
             projectFilter={projectFilter}
             selectedId={backlogSelectedId}
             onSelect={setBacklogSelectedId}

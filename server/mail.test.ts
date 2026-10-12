@@ -1,0 +1,117 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const sendMail = vi.hoisted(() => vi.fn(async () => ({ messageId: "mock-id" })));
+const createTransport = vi.hoisted(() => vi.fn(() => ({ sendMail })));
+
+vi.mock("nodemailer", () => ({
+  default: { createTransport },
+}));
+
+import { canSendEmail, capturedMail, clearMailbox, deliverAuthEmail, smtpSettings, usingTestMailbox } from "./mail";
+
+const smtpKeys = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "EMAIL_DELIVERY", "NODE_ENV"] as const;
+
+describe("SMTP delivery", () => {
+  const previous = Object.fromEntries(smtpKeys.map((key) => [key, process.env[key]]));
+
+  afterEach(() => {
+    for (const key of smtpKeys) {
+      const value = previous[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    sendMail.mockClear();
+    createTransport.mockClear();
+    clearMailbox();
+  });
+
+  it("keeps mail closed until host, port 465, user, password, and from are all set", () => {
+    process.env.NODE_ENV = "test";
+    process.env.EMAIL_DELIVERY = "";
+    process.env.SMTP_HOST = "mail.arstacks.co.za";
+    process.env.SMTP_PORT = "465";
+    process.env.SMTP_USER = "barend@arstacks.co.za";
+    process.env.SMTP_FROM = "barend@arstacks.co.za";
+    delete process.env.SMTP_PASSWORD;
+    expect(smtpSettings()).toBeNull();
+    expect(canSendEmail()).toBe(false);
+  });
+
+  it("rejects a port that is not implicit TLS", () => {
+    process.env.NODE_ENV = "test";
+    process.env.EMAIL_DELIVERY = "";
+    process.env.SMTP_HOST = "mail.arstacks.co.za";
+    process.env.SMTP_PORT = "587";
+    process.env.SMTP_USER = "barend@arstacks.co.za";
+    process.env.SMTP_PASSWORD = "test-only-not-a-mailbox-password";
+    process.env.SMTP_FROM = "barend@arstacks.co.za";
+    expect(canSendEmail()).toBe(false);
+  });
+
+  it("hands a verification message to SMTP on port 465 with certificate checks on", async () => {
+    process.env.NODE_ENV = "test";
+    process.env.EMAIL_DELIVERY = "";
+    process.env.SMTP_HOST = "mail.arstacks.co.za";
+    process.env.SMTP_PORT = "465";
+    process.env.SMTP_USER = "barend@arstacks.co.za";
+    process.env.SMTP_PASSWORD = "test-only-not-a-mailbox-password";
+    process.env.SMTP_FROM = "barend@arstacks.co.za";
+
+    await deliverAuthEmail({
+      to: "andrew@arstacks.co.za",
+      subject: "Confirm your ARStacksOps account",
+      url: "https://app.example/api/auth/verify-email?token=abc",
+      text: "Confirm your account: https://app.example/api/auth/verify-email?token=abc",
+    });
+
+    expect(createTransport).toHaveBeenCalledWith({
+      host: "mail.arstacks.co.za",
+      port: 465,
+      secure: true,
+      auth: {
+        user: "barend@arstacks.co.za",
+        pass: "test-only-not-a-mailbox-password",
+      },
+      tls: {
+        rejectUnauthorized: true,
+        servername: "mail.arstacks.co.za",
+      },
+    });
+    expect(sendMail).toHaveBeenCalledWith({
+      from: "barend@arstacks.co.za",
+      to: "andrew@arstacks.co.za",
+      subject: "Confirm your ARStacksOps account",
+      text: "Confirm your account: https://app.example/api/auth/verify-email?token=abc",
+    });
+    expect(capturedMail()).toHaveLength(0);
+  });
+
+  it("uses the in-memory mailbox only when EMAIL_DELIVERY=test and does not open SMTP", async () => {
+    process.env.NODE_ENV = "test";
+    process.env.EMAIL_DELIVERY = "test";
+    process.env.SMTP_HOST = "mail.arstacks.co.za";
+    process.env.SMTP_PORT = "465";
+    process.env.SMTP_USER = "barend@arstacks.co.za";
+    process.env.SMTP_PASSWORD = "test-only-not-a-mailbox-password";
+    process.env.SMTP_FROM = "barend@arstacks.co.za";
+    expect(usingTestMailbox()).toBe(true);
+
+    await deliverAuthEmail({
+      to: "one@arstacks.test",
+      subject: "Confirm your ARStacksOps account",
+      url: "http://localhost:5173/api/auth/verify-email?token=abc",
+      text: "Confirm your account: http://localhost:5173/api/auth/verify-email?token=abc",
+    });
+
+    expect(createTransport).not.toHaveBeenCalled();
+    expect(capturedMail()).toHaveLength(1);
+  });
+
+  it("does not treat the test mailbox as delivery in production", () => {
+    process.env.NODE_ENV = "production";
+    process.env.EMAIL_DELIVERY = "test";
+    delete process.env.SMTP_PASSWORD;
+    expect(usingTestMailbox()).toBe(false);
+    expect(canSendEmail()).toBe(false);
+  });
+});

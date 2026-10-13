@@ -44,52 +44,54 @@ export function ProjectSidebar({
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <img src="/ar-mark.png" alt="" />
-        <div>
-          <h1>ARStacksOps</h1>
-          <p>Work items</p>
+      <div className="side-sticky">
+        <div className="brand">
+          <img src="/ar-mark.png" alt="" />
+          <div>
+            <h1>ARStacksOps</h1>
+            <p>Work items</p>
+          </div>
         </div>
-      </div>
 
-      <div className="signed-in">
-        <span>Signed in as {sessionName}</span>
-        <button className="quiet" type="button" onClick={onSignOut}>
-          Sign out
-        </button>
-      </div>
+        <div className="signed-in">
+          <span>Signed in as {sessionName}</span>
+          <button className="quiet" type="button" onClick={onSignOut}>
+            Sign out
+          </button>
+        </div>
 
-      <div className="side-head">
-        <h2>Projects</h2>
-        <button className="side-add" type="button" onClick={() => setAdding((open) => !open)}>
-          {adding ? "Close" : "Add project"}
-        </button>
-      </div>
+        <div className="side-head">
+          <h2>Projects</h2>
+          <button className="side-add" type="button" onClick={() => setAdding((open) => !open)}>
+            {adding ? "Close" : "Add project"}
+          </button>
+        </div>
 
-      <div className="side-tabs" role="tablist" aria-label="Project list">
-        <button
-          className={list === "active" ? "tab active" : "tab"}
-          type="button"
-          role="tab"
-          aria-selected={list === "active"}
-          onClick={() => {
-            setList("active");
-            if (selected && isSignedOff(selected)) onSelect("all");
-          }}
-        >
-          Active
-        </button>
-        <button
-          className={list === "completed" ? "tab active" : "tab"}
-          type="button"
-          role="tab"
-          aria-selected={list === "completed"}
-          onClick={() => setList("completed")}
-        >
-          Completed
-        </button>
+        <div className="side-tabs" role="tablist" aria-label="Project list">
+          <button
+            className={list === "active" ? "tab active" : "tab"}
+            type="button"
+            role="tab"
+            aria-selected={list === "active"}
+            onClick={() => {
+              setList("active");
+              if (selected && isSignedOff(selected)) onSelect("all");
+            }}
+          >
+            Active
+          </button>
+          <button
+            className={list === "completed" ? "tab active" : "tab"}
+            type="button"
+            role="tab"
+            aria-selected={list === "completed"}
+            onClick={() => setList("completed")}
+          >
+            Completed
+          </button>
+        </div>
+        {notice ? <p className="project-meta">{notice}</p> : null}
       </div>
-      {notice ? <p className="project-meta">{notice}</p> : null}
 
       {adding ? (
         <ProjectFields
@@ -156,10 +158,9 @@ export function ProjectSidebar({
       </div>
 
       {selected ? (
-        <section className="side-edit">
+        <section className="side-edit" key={selected.id}>
           <h2>Project details</h2>
           <ProjectLifecycle
-            key={selected.id}
             project={selected}
             onChanged={onChanged}
             onDeleted={(name) => {
@@ -177,7 +178,6 @@ export function ProjectSidebar({
             }}
           />
           <ProjectFields
-            key={selected.id}
             submitLabel="Save changes"
             name={selected.name}
             color={selected.color}

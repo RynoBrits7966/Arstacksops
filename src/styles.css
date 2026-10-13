@@ -135,13 +135,37 @@ button:disabled {
   padding: 12px;
 }
 
-.side-tabs {
+.side-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: -16px -12px 0;
+  padding: 16px 12px 10px;
+  background: var(--navy-side);
+  border-bottom: 1px solid var(--line);
+}
+
+.side-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 4px;
+  padding: 4px;
+  background: var(--navy-field);
+  border-radius: 8px;
 }
 
 .side-tabs .tab {
-  padding: 8px 10px 6px;
+  justify-content: center;
+  border-bottom: 0;
+  padding: 8px 10px;
+}
+
+.side-tabs .tab.active {
+  background: var(--navy-raise);
+  border-bottom-color: transparent;
 }
 
 .project-lifecycle,

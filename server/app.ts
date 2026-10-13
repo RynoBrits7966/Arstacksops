@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { Pool } from "pg";
 import type { MemoryDB } from "better-auth/adapters/memory";
 import { betterAuth } from "better-auth";
+import { isAllowlisted } from "./allowlist";
 import { authOptions, type Auth } from "./auth";
 import {
   EMAIL_ACTION_CLOSED_MESSAGE,
@@ -10,9 +11,16 @@ import {
   capturedMail,
   productionStartupError,
 } from "./mail";
+import {
+  clearPasswordFailure,
+  passwordAttemptLimited,
+  passwordMatches,
+  recordPasswordFailure,
+} from "./password-check";
 import { ensureAuthTables } from "./schema";
-import { memoryWorkspace, postgresWorkspace, type Member, type WorkspaceStore } from "./workspace";
+import { memoryWorkspace, postgresWorkspace, type Member, type ProjectMutation, type WorkspaceStore } from "./workspace";
 import type { User } from "../src/types";
+import type { Context } from "hono";
 
 export interface AppOptions {
   memory?: MemoryDB;
@@ -59,6 +67,52 @@ export async function createApp(options: AppOptions = {}) {
     return c.json(record);
   });
 
+  app.post("/api/projects/:id/delete", async (c) => {
+    const member = await requireMember(auth, c.req.raw.headers);
+    if (!member.ok) return c.json({ message: member.message }, member.status);
+    const body = (await c.req.json().catch(() => null)) as { password?: unknown; version?: unknown } | null;
+    if (!body || typeof body.version !== "number" || typeof body.password !== "string" || body.password.length === 0) {
+      return c.json({ message: "Enter your password to delete this project." }, 400);
+    }
+    if (passwordAttemptLimited(member.session.user.id)) {
+      return c.json({ message: "Too many attempts. Wait a few minutes and try again." }, 429);
+    }
+    const matches = await passwordMatches(auth, member.session.user.email, body.password);
+    if (!matches) {
+      recordPasswordFailure(member.session.user.id);
+      return c.json({ message: "That password is incorrect." }, 400);
+    }
+    clearPasswordFailure(member.session.user.id);
+    const result = await workspace.deleteProject(body.version, c.req.param("id"));
+    return mutationResponse(c, result);
+  });
+
+  app.post("/api/projects/:id/sign-off", async (c) => {
+    const member = await requireMember(auth, c.req.raw.headers);
+    if (!member.ok) return c.json({ message: member.message }, member.status);
+    const body = (await c.req.json().catch(() => null)) as { version?: unknown } | null;
+    if (!body || typeof body.version !== "number") {
+      return c.json({ message: "Send the board version." }, 400);
+    }
+    const result = await workspace.signOff(body.version, c.req.param("id"), {
+      userId: member.session.user.id,
+      name: member.session.user.name || member.session.user.email,
+      at: new Date().toISOString(),
+    });
+    return mutationResponse(c, result);
+  });
+
+  app.post("/api/projects/:id/reopen", async (c) => {
+    const member = await requireMember(auth, c.req.raw.headers);
+    if (!member.ok) return c.json({ message: member.message }, member.status);
+    const body = (await c.req.json().catch(() => null)) as { version?: unknown } | null;
+    if (!body || typeof body.version !== "number") {
+      return c.json({ message: "Send the board version." }, 400);
+    }
+    const result = await workspace.reopen(body.version, c.req.param("id"));
+    return mutationResponse(c, result);
+  });
+
   app.put("/api/workspace", async (c) => {
     const session = await requireSession(auth, c.req.raw.headers);
     if (!session) return c.json({ message: "Sign in required" }, 401);
@@ -101,6 +155,31 @@ async function requireSession(auth: Auth, headers: Headers) {
   const session = await auth.api.getSession({ headers });
   if (!session?.user?.emailVerified) return null;
   return session;
+}
+
+type MemberResult =
+  | { ok: true; session: NonNullable<Awaited<ReturnType<Auth["api"]["getSession"]>>> }
+  | { ok: false; status: 401 | 403; message: string };
+
+async function requireMember(auth: Auth, headers: Headers): Promise<MemberResult> {
+  const session = await auth.api.getSession({ headers });
+  if (!session?.user?.email || !session.user.emailVerified) {
+    return { ok: false, status: 401, message: "Sign in required" };
+  }
+  if (!isAllowlisted(session.user.email)) {
+    return { ok: false, status: 403, message: "This email is not allowed to sign in." };
+  }
+  return { ok: true, session };
+}
+
+function mutationResponse(c: Context, result: ProjectMutation) {
+  if (result.ok) return c.json(result.record);
+  if (result.reason === "conflict") {
+    return c.json({ message: "Someone else updated the board. Reload the page and try again." }, 409);
+  }
+  if (result.reason === "missing") return c.json({ message: "That project is no longer on the board." }, 404);
+  if (result.reason === "already-signed-off") return c.json({ message: "This project is already signed off." }, 400);
+  return c.json({ message: "This project is already active." }, 400);
 }
 
 export async function createListeningApp() {

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
+import { ProjectLifecycle } from "./ProjectLifecycle";
 import {
   PROJECT_COLORS,
   formatDeadline,
   isColorTaken,
   isDeadlinePriority,
+  isSignedOff,
   nextProjectColor,
   sortProjects,
 } from "../projects";
@@ -31,8 +33,14 @@ export function ProjectSidebar({
   onChanged,
 }: ProjectSidebarProps) {
   const [adding, setAdding] = useState(false);
+  const [list, setList] = useState<"active" | "completed">("active");
+  const [notice, setNotice] = useState<string | null>(null);
   const ordered = sortProjects(projects);
+  const active = ordered.filter((project) => !isSignedOff(project));
+  const completed = ordered.filter((project) => isSignedOff(project));
+  const visible = list === "completed" ? completed : active;
   const selected = projects.find((project) => project.id === selectedId) ?? null;
+  const activeIssueCount = tasks.filter((task) => active.some((project) => project.id === task.projectId)).length;
 
   return (
     <aside className="sidebar">
@@ -58,6 +66,31 @@ export function ProjectSidebar({
         </button>
       </div>
 
+      <div className="side-tabs" role="tablist" aria-label="Project list">
+        <button
+          className={list === "active" ? "tab active" : "tab"}
+          type="button"
+          role="tab"
+          aria-selected={list === "active"}
+          onClick={() => {
+            setList("active");
+            if (selected && isSignedOff(selected)) onSelect("all");
+          }}
+        >
+          Active
+        </button>
+        <button
+          className={list === "completed" ? "tab active" : "tab"}
+          type="button"
+          role="tab"
+          aria-selected={list === "completed"}
+          onClick={() => setList("completed")}
+        >
+          Completed
+        </button>
+      </div>
+      {notice ? <p className="project-meta">{notice}</p> : null}
+
       {adding ? (
         <ProjectFields
           submitLabel="Save project"
@@ -73,20 +106,22 @@ export function ProjectSidebar({
       ) : null}
 
       <div className="project-list" role="list">
-        <button
-          className={selectedId === "all" ? "project-row active" : "project-row"}
-          type="button"
-          onClick={() => onSelect("all")}
-        >
-          <span className="swatch-dot all" aria-hidden="true" />
-          <span>
-            <strong>All projects</strong>
-            <span className="project-meta">
-              {tasks.length} {tasks.length === 1 ? "issue" : "issues"}
+        {list === "active" ? (
+          <button
+            className={selectedId === "all" ? "project-row active" : "project-row"}
+            type="button"
+            onClick={() => onSelect("all")}
+          >
+            <span className="swatch-dot all" aria-hidden="true" />
+            <span>
+              <strong>All projects</strong>
+              <span className="project-meta">
+                {activeIssueCount} {activeIssueCount === 1 ? "issue" : "issues"}
+              </span>
             </span>
-          </span>
-        </button>
-        {ordered.map((project) => {
+          </button>
+        ) : null}
+        {visible.map((project) => {
           const count = tasks.filter((task) => task.projectId === project.id).length;
           const dueSoon = project.deadline ? isDeadlinePriority(project.deadline) : false;
           return (
@@ -101,7 +136,11 @@ export function ProjectSidebar({
                 <strong>{project.name}</strong>
                 <span className="project-meta">{project.client || "No client yet"}</span>
                 <span className={dueSoon ? "project-meta due-soon" : "project-meta"}>
-                  {project.deadline ? `Due ${formatDeadline(project.deadline)}` : "N/A"}
+                  {project.signOff
+                    ? `Signed off by ${project.signOff.name}`
+                    : project.deadline
+                      ? `Due ${formatDeadline(project.deadline)}`
+                      : "N/A"}
                   {" · "}
                   {count} {count === 1 ? "issue" : "issues"}
                 </span>
@@ -109,14 +148,34 @@ export function ProjectSidebar({
             </button>
           );
         })}
-        {ordered.length === 0 ? (
-          <p className="side-empty">Add a project, then log tickets against it.</p>
+        {visible.length === 0 ? (
+          <p className="side-empty">
+            {list === "completed" ? "Signed-off projects will appear here." : "Add a project, then log tickets against it."}
+          </p>
         ) : null}
       </div>
 
       {selected ? (
         <section className="side-edit">
           <h2>Project details</h2>
+          <ProjectLifecycle
+            key={selected.id}
+            project={selected}
+            onChanged={onChanged}
+            onDeleted={(name) => {
+              setNotice(`Deleted ${name}.`);
+              setList("active");
+              onSelect("all");
+            }}
+            onSignedOff={(name) => {
+              setNotice(`${name} signed off and moved to Completed.`);
+              setList("completed");
+            }}
+            onReopened={(name) => {
+              setNotice(`${name} is active again.`);
+              setList("active");
+            }}
+          />
           <ProjectFields
             key={selected.id}
             submitLabel="Save changes"

@@ -7,6 +7,7 @@ import type {
   DetailCategory,
   Priority,
   Project,
+  ProjectSignOff,
   Severity,
   Task,
   TaskStatus,
@@ -250,6 +251,15 @@ function assignMissingOrder(tasks: Task[]): boolean {
   return changed;
 }
 
+function normalizeSignOff(value: unknown): ProjectSignOff | null {
+  const record = asRecord(value);
+  if (!record || typeof record.userId !== "string" || typeof record.name !== "string" || typeof record.at !== "string") {
+    return null;
+  }
+  if (!record.userId || !record.name || !record.at) return null;
+  return { userId: record.userId, name: record.name, at: record.at };
+}
+
 function normalizeProject(raw: unknown): Project | null {
   const record = asRecord(raw);
   if (!record || typeof record.id !== "string" || typeof record.name !== "string") return null;
@@ -261,6 +271,7 @@ function normalizeProject(raw: unknown): Project | null {
     client: typeof record.client === "string" ? record.client : "",
     deadline: typeof record.deadline === "string" ? record.deadline : null,
     createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date(0).toISOString(),
+    signOff: normalizeSignOff(record.signOff),
   };
 }
 

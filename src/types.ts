@@ -8,6 +8,12 @@ export type TaskStatus =
 
 export type MovableStatus = Exclude<TaskStatus, "archived">;
 
+export interface ProjectSignOff {
+  userId: string;
+  name: string;
+  at: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -16,6 +22,8 @@ export interface Project {
   /** Calendar day YYYY-MM-DD, or null when the deadline is N/A. */
   deadline: string | null;
   createdAt: string;
+  /** Set by the server when a member signs the project off. Absent or null while it is active. */
+  signOff?: ProjectSignOff | null;
 }
 
 export interface User {

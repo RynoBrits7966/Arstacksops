@@ -152,6 +152,23 @@ async function persist() {
   await run;
 }
 
+async function projectAction(path: string, extra: Record<string, unknown> = {}) {
+  await ensure();
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: remoteVersion, ...extra }),
+  });
+  const body = (await response.json().catch(() => null)) as { message?: string; version?: number; snapshot?: unknown } | null;
+  if (response.status === 401) throw new AuthRequiredError();
+  if (!response.ok) throw new Error(body?.message ?? "Could not update the project.");
+  const built = buildSnapshot(body?.snapshot);
+  if (!built.ok) throw new Error(built.message);
+  cache = built.snapshot;
+  remoteVersion = typeof body?.version === "number" ? body.version : remoteVersion;
+}
+
 async function saveSharedWorkspace() {
   if (!cache) return;
   const response = await fetch("/api/workspace", {
@@ -531,7 +548,11 @@ export const taskStore: TaskStore & {
   },
   listProjects: async () => {
     await ensure();
-    return cache!.projects.map((project) => ({ ...project, client: project.client ?? "" }));
+    return cache!.projects.map((project) => ({
+      ...project,
+      client: project.client ?? "",
+      signOff: project.signOff ?? null,
+    }));
   },
   createProject: async (input) => {
     await ensure();
@@ -540,7 +561,12 @@ export const taskStore: TaskStore & {
       if (isColorTaken(draft.projects.map((project) => project.color), fields.color)) {
         throw new Error("That colour is already used by another project");
       }
-      const project: Project = { id: crypto.randomUUID(), ...fields, createdAt: new Date().toISOString() };
+      const project: Project = {
+        id: crypto.randomUUID(),
+        ...fields,
+        createdAt: new Date().toISOString(),
+        signOff: null,
+      };
       draft.projects.push(project);
       return project;
     });
@@ -556,6 +582,21 @@ export const taskStore: TaskStore & {
       Object.assign(current, fields);
       return { ...current };
     });
+  },
+  deleteProject: async (id, password) => {
+    await projectAction(`/api/projects/${encodeURIComponent(id)}/delete`, { password });
+  },
+  signOffProject: async (id) => {
+    await projectAction(`/api/projects/${encodeURIComponent(id)}/sign-off`);
+    const project = cache?.projects.find((item) => item.id === id);
+    if (!project) throw new Error("That project is no longer on the board.");
+    return { ...project, signOff: project.signOff ?? null };
+  },
+  reopenProject: async (id) => {
+    await projectAction(`/api/projects/${encodeURIComponent(id)}/reopen`);
+    const project = cache?.projects.find((item) => item.id === id);
+    if (!project) throw new Error("That project is no longer on the board.");
+    return { ...project, signOff: project.signOff ?? null };
   },
   listTasks: async () => {
     await ensure();

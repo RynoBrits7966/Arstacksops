@@ -24,6 +24,10 @@ export function nextProjectColor(used: string[]): string {
   return `#${n.toString(16).padStart(6, "0")}`;
 }
 
+export function isSignedOff(project: Pick<Project, "signOff">): boolean {
+  return project.signOff != null;
+}
+
 export function sortProjects<T extends Pick<Project, "name" | "deadline">>(projects: T[]): T[] {
   return [...projects].sort((a, b) => {
     if (a.deadline && b.deadline) {

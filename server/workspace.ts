@@ -1,7 +1,8 @@
 import { buildSnapshot, emptySnapshot, type Snapshot } from "../src/storage/snapshot";
-import type { User } from "../src/types";
+import type { ProjectSignOff, User } from "../src/types";
 import type { Pool } from "pg";
 import type { MemoryDB } from "better-auth/adapters/memory";
+import { guardProjectWrite, removeProject, reopenProject, signOffProject, type SnapshotChange } from "./projects";
 
 export interface Member {
   id: string;
@@ -22,10 +23,17 @@ interface AuthUserRow {
   emailVerified?: boolean;
 }
 
+export type ProjectMutation =
+  | { ok: true; record: WorkspaceRecord }
+  | { ok: false; reason: "conflict" | "missing" | "already-signed-off" | "already-active" };
+
 export interface WorkspaceStore {
   read(): Promise<WorkspaceRecord>;
   write(expectedVersion: number, snapshot: unknown, members: User[]): Promise<WorkspaceRecord | "conflict">;
   members(): Promise<Member[]>;
+  deleteProject(expectedVersion: number, projectId: string): Promise<ProjectMutation>;
+  signOff(expectedVersion: number, projectId: string, signOff: ProjectSignOff): Promise<ProjectMutation>;
+  reopen(expectedVersion: number, projectId: string): Promise<ProjectMutation>;
 }
 
 export function memoryWorkspace(db: MemoryDB): WorkspaceStore {
@@ -38,11 +46,27 @@ export function memoryWorkspace(db: MemoryDB): WorkspaceStore {
       if (expectedVersion !== record.version) return "conflict";
       const built = buildSnapshot(snapshot);
       if (!built.ok) throw new Error(built.message);
-      record = { version: record.version + 1, snapshot: withMembers(built.snapshot, members) };
+      const guarded = guardProjectWrite(record.snapshot, built.snapshot);
+      record = { version: record.version + 1, snapshot: withMembers(guarded, members) };
       return record;
     },
     async members() {
       return verifiedMembers(db);
+    },
+    async deleteProject(expectedVersion, projectId) {
+      return applyMemory(db, () => record, (next) => {
+        record = next;
+      }, expectedVersion, (snapshot) => removeProject(snapshot, projectId));
+    },
+    async signOff(expectedVersion, projectId, signOff) {
+      return applyMemory(db, () => record, (next) => {
+        record = next;
+      }, expectedVersion, (snapshot) => signOffProject(snapshot, projectId, signOff));
+    },
+    async reopen(expectedVersion, projectId) {
+      return applyMemory(db, () => record, (next) => {
+        record = next;
+      }, expectedVersion, (snapshot) => reopenProject(snapshot, projectId));
     },
   };
 }
@@ -59,7 +83,10 @@ export function postgresWorkspace(pool: Pool): WorkspaceStore {
       await ensureWorkspaceTable(pool);
       const built = buildSnapshot(snapshot);
       if (!built.ok) throw new Error(built.message);
-      const next = withMembers(built.snapshot, members);
+      const current = await loadRow(pool);
+      if (current.version !== expectedVersion) return "conflict";
+      const guarded = guardProjectWrite(current.snapshot, built.snapshot);
+      const next = withMembers(guarded, members);
       const updated = await pool.query(
         `UPDATE workspace
          SET version = version + 1, snapshot = $2::jsonb
@@ -74,7 +101,55 @@ export function postgresWorkspace(pool: Pool): WorkspaceStore {
     async members() {
       return postgresMembers(pool);
     },
+    deleteProject(expectedVersion, projectId) {
+      return savePostgres(pool, expectedVersion, (snapshot) => removeProject(snapshot, projectId));
+    },
+    signOff(expectedVersion, projectId, signOff) {
+      return savePostgres(pool, expectedVersion, (snapshot) => signOffProject(snapshot, projectId, signOff));
+    },
+    reopen(expectedVersion, projectId) {
+      return savePostgres(pool, expectedVersion, (snapshot) => reopenProject(snapshot, projectId));
+    },
   };
+}
+
+function applyMemory(
+  db: MemoryDB,
+  read: () => WorkspaceRecord,
+  write: (record: WorkspaceRecord) => void,
+  expectedVersion: number,
+  change: (snapshot: Snapshot) => SnapshotChange,
+): ProjectMutation {
+  const current = read();
+  if (current.version !== expectedVersion) return { ok: false, reason: "conflict" };
+  const changed = change(current.snapshot);
+  if (!changed.ok) return changed;
+  const record = { version: current.version + 1, snapshot: withMembers(changed.snapshot, verifiedMembers(db)) };
+  write(record);
+  return { ok: true, record };
+}
+
+async function savePostgres(
+  pool: Pool,
+  expectedVersion: number,
+  change: (snapshot: Snapshot) => SnapshotChange,
+): Promise<ProjectMutation> {
+  await ensureWorkspaceTable(pool);
+  const current = await loadRow(pool);
+  if (current.version !== expectedVersion) return { ok: false, reason: "conflict" };
+  const changed = change(current.snapshot);
+  if (!changed.ok) return changed;
+  const next = withMembers(changed.snapshot, await postgresMembers(pool));
+  const updated = await pool.query(
+    `UPDATE workspace
+     SET version = version + 1, snapshot = $2::jsonb
+     WHERE id = 'company' AND version = $1
+     RETURNING version, snapshot`,
+    [expectedVersion, JSON.stringify(next)],
+  );
+  if (updated.rowCount === 0) return { ok: false, reason: "conflict" };
+  const row = updated.rows[0] as { version: number; snapshot: Snapshot };
+  return { ok: true, record: { version: row.version, snapshot: row.snapshot } };
 }
 
 function withMembers(snapshot: Snapshot, members: User[]): Snapshot {

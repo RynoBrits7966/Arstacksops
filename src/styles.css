@@ -135,6 +135,34 @@ button:disabled {
   padding: 12px;
 }
 
+.side-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.side-tabs .tab {
+  padding: 8px 10px 6px;
+}
+
+.project-lifecycle,
+.confirm-form,
+.project-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.project-actions {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.danger {
+  background: transparent;
+  color: #ffb4a8;
+  border: 1px solid #a33b32;
+  font-weight: 700;
+}
+
 .side-form label,
 .side-edit label {
   display: grid;

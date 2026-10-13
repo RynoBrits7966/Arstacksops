@@ -6,7 +6,7 @@ import { IssueBoard } from "./components/IssueBoard";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { StatsPage } from "./components/StatsPage";
 import { unreadMentionIds } from "./mentions";
-import { compareDeadlinePriority } from "./projects";
+import { compareDeadlinePriority, isSignedOff } from "./projects";
 import { AuthRequiredError, closeWorkspace, taskStore } from "./storage/localStore";
 import type { Comment, Project, Task, TaskStatus, User } from "./types";
 
@@ -84,7 +84,11 @@ export function App() {
     };
   }, [refresh, session]);
 
-  const orderedTasks = [...tasks].sort((a, b) => {
+  const selectedProject = projects.find((project) => project.id === projectFilter) ?? null;
+  const boardProjects = selectedProject ? [selectedProject] : projects.filter((project) => !isSignedOff(project));
+  const boardProjectIds = new Set(boardProjects.map((project) => project.id));
+  const boardTasks = tasks.filter((task) => boardProjectIds.has(task.projectId));
+  const orderedTasks = [...boardTasks].sort((a, b) => {
     const deadlineOf = (task: Task) => projects.find((project) => project.id === task.projectId)?.deadline ?? null;
     const byDeadline = compareDeadlinePriority(deadlineOf(a), deadlineOf(b));
     if (byDeadline !== 0) return byDeadline;
@@ -185,7 +189,7 @@ export function App() {
         {ready && !error && view === "work" ? (
           <IssueBoard
             tasks={orderedTasks}
-            projects={projects}
+            projects={boardProjects}
             users={users}
             comments={comments}
             currentUserId={session.id}
@@ -200,8 +204,8 @@ export function App() {
         ) : null}
         {ready && !error && view === "backlog" ? (
           <BacklogView
-            tasks={tasks}
-            projects={projects}
+            tasks={boardTasks}
+            projects={boardProjects}
             users={users}
             currentUserId={session.id}
             projectFilter={projectFilter}
@@ -211,7 +215,7 @@ export function App() {
           />
         ) : null}
         {ready && !error && view === "stats" ? (
-          <StatsPage tasks={tasks} projects={projects} projectFilter={projectFilter} />
+          <StatsPage tasks={boardTasks} projects={boardProjects} projectFilter={projectFilter} />
         ) : null}
       </div>
     </div>

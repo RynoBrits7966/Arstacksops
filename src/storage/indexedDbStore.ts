@@ -58,6 +58,10 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
+function sharedBoardOnly(): Promise<never> {
+  return Promise.reject(new Error("Sign-off and deletion run on the shared board."));
+}
+
 function isImageFile(file: File): boolean {
   return file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
 }
@@ -68,6 +72,9 @@ export const taskStore: TaskStore = {
   listProjects,
   createProject,
   updateProject,
+  deleteProject: sharedBoardOnly,
+  signOffProject: sharedBoardOnly,
+  reopenProject: sharedBoardOnly,
   listTasks,
   createTask,
   updateTask,

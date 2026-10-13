@@ -48,6 +48,9 @@ export interface TaskStore {
   listProjects(): Promise<Project[]>;
   createProject(input: ProjectInput): Promise<Project>;
   updateProject(id: string, patch: ProjectInput): Promise<Project>;
+  deleteProject(id: string, password: string): Promise<void>;
+  signOffProject(id: string): Promise<Project>;
+  reopenProject(id: string): Promise<Project>;
   listTasks(): Promise<Task[]>;
   createTask(input: {
     title: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSnapshot, hierarchyIssues, inspectImport } from "./snapshot";
+import { buildSnapshot, emptySnapshot, hierarchyIssues, inspectImport, rebaseSnapshot } from "./snapshot";
 
 describe("snapshot migration", () => {
   it("keeps existing ids and defaults a missing type to task at project level", () => {
@@ -124,3 +124,70 @@ describe("hierarchyIssues", () => {
     expect(again.ok && again.changed).toBe(false);
   });
 });
+
+describe("rebaseSnapshot", () => {
+  it("keeps a new ticket when the server board moved on", () => {
+    const base = emptySnapshot();
+    base.projects = [{ id: "p1", name: "Aerostacks", color: "#eb8536", client: "Aerocare", deadline: null, createdAt: "2026-10-01T00:00:00.000Z", signOff: null }];
+    const server = {
+      ...base,
+      nextSeq: 4,
+      projects: [
+        ...base.projects,
+        { id: "p2", name: "TEST", color: "#3d7ea6", client: "TEST", deadline: null, createdAt: "2026-10-02T00:00:00.000Z", signOff: null },
+      ],
+    };
+    const local = {
+      ...base,
+      nextSeq: 2,
+      tasks: [{ ...emptyTask(), id: "task-1", projectId: "p1", title: "New ticket" }],
+    };
+    const merged = rebaseSnapshot(base, local, server);
+    expect(merged.projects.map((project) => project.id)).toEqual(["p1", "p2"]);
+    expect(merged.tasks.map((task) => task.id)).toEqual(["task-1"]);
+    expect(merged.nextSeq).toBe(4);
+  });
+});
+
+function emptyTask() {
+  return {
+    id: "task",
+    projectId: "p1",
+    assigneeId: "",
+    acceptedAt: null,
+    escalatedToId: null,
+    escalationSeenAt: null,
+    title: "Ticket",
+    description: "",
+    status: "new" as const,
+    createdAt: "2026-10-13T00:00:00.000Z",
+    updatedAt: "2026-10-13T00:00:00.000Z",
+    lastWorkedAt: "2026-10-13T00:00:00.000Z",
+    closedAt: null,
+    ticketNumber: 1,
+    issueType: "improvement" as const,
+    issueSeverity: null,
+    platforms: [],
+    affectedArea: "",
+    detailCategory: null,
+    workItemType: "task" as const,
+    parentId: null,
+    order: 1,
+    tags: [],
+    priority: null,
+    dueDate: null,
+    storyPoints: null,
+    estimateHours: null,
+    acceptanceCriteria: "",
+    severity: null,
+    environment: "",
+    stepsToReproduce: "",
+    expectedBehaviour: "",
+    actualBehaviour: "",
+    activity: [],
+    checklist: [],
+    archivedAt: null,
+    archiveVisitedAt: null,
+    githubLinks: [],
+  };
+}

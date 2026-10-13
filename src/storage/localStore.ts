@@ -10,6 +10,7 @@ import {
   buildSnapshot,
   emptySnapshot,
   inspectImport,
+  rebaseSnapshot,
   toComment,
   type Snapshot,
   type StoredAttachment,
@@ -134,7 +135,7 @@ function keepFlatBackup(raw: string) {
   localStorage.setItem(FLAT_BACKUP_KEY, raw);
 }
 
-async function persist() {
+async function persist(base?: Snapshot) {
   if (!cache) return;
   if (!usesSharedWorkspace()) {
     try {
@@ -144,7 +145,8 @@ async function persist() {
     }
     return;
   }
-  const run = saveChain.then(() => saveSharedWorkspace());
+  const origin = base ?? cache;
+  const run = saveChain.then(() => saveSharedWorkspace(origin));
   saveChain = run.then(
     () => undefined,
     () => undefined,
@@ -169,7 +171,7 @@ async function projectAction(path: string, extra: Record<string, unknown> = {}) 
   remoteVersion = typeof body?.version === "number" ? body.version : remoteVersion;
 }
 
-async function saveSharedWorkspace() {
+async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
   if (!cache) return;
   const response = await fetch("/api/workspace", {
     method: "PUT",
@@ -178,7 +180,19 @@ async function saveSharedWorkspace() {
     body: JSON.stringify({ version: remoteVersion, snapshot: cache }),
   });
   if (response.status === 401) throw new AuthRequiredError();
+  if (response.status === 409 && attempt === 0) {
+    const latest = await fetchWorkspace();
+    cache = rebaseSnapshot(base, cache, latest.snapshot);
+    remoteVersion = latest.version;
+    await saveSharedWorkspace(latest.snapshot, 1);
+    return;
+  }
   if (response.status === 409) {
+    const latest = await fetchWorkspace().catch(() => null);
+    if (latest) {
+      cache = latest.snapshot;
+      remoteVersion = latest.version;
+    }
     throw new Error("Someone else updated the board. Reload the page and try again.");
   }
   if (!response.ok) {
@@ -195,11 +209,10 @@ async function commit<T>(change: (draft: Snapshot) => T): Promise<T> {
   const previousVersion = remoteVersion;
   try {
     const result = change(cache);
-    await persist();
+    await persist(previous);
     return result;
   } catch (error) {
-    cache = previous;
-    remoteVersion = previousVersion;
+    if (remoteVersion === previousVersion) cache = previous;
     throw error;
   }
 }
@@ -267,15 +280,20 @@ async function backupFromIndexedDb(): Promise<Record<string, unknown> | null> {
   };
 }
 
-async function loadSharedWorkspace() {
+async function fetchWorkspace(): Promise<{ version: number; snapshot: Snapshot }> {
   const response = await fetch("/api/workspace", { credentials: "include" });
   if (response.status === 401) throw new AuthRequiredError();
   if (!response.ok) throw new Error("Could not load the shared board.");
   const body = (await response.json()) as { version: number; snapshot: unknown };
   const built = buildSnapshot(body.snapshot);
   if (!built.ok) throw new Error(built.message);
-  cache = built.snapshot;
-  remoteVersion = body.version;
+  return { version: body.version, snapshot: built.snapshot };
+}
+
+async function loadSharedWorkspace() {
+  const loaded = await fetchWorkspace();
+  cache = loaded.snapshot;
+  remoteVersion = loaded.version;
 }
 
 async function load() {
@@ -963,13 +981,18 @@ export const taskStore: TaskStore & {
   },
   archiveExpired: async (now = new Date()) => {
     await ensure();
-    commit((draft) => {
-      const commentTimes = new Map<string, string[]>();
-      for (const comment of draft.comments) {
-        const times = commentTimes.get(comment.taskId) ?? [];
-        times.push(comment.createdAt);
-        commentTimes.set(comment.taskId, times);
-      }
+    const commentTimes = new Map<string, string[]>();
+    for (const comment of cache!.comments) {
+      const times = commentTimes.get(comment.taskId) ?? [];
+      times.push(comment.createdAt);
+      commentTimes.set(comment.taskId, times);
+    }
+    const due = cache!.tasks.some((task) => {
+      const lastWorkedAt = latestWorkAt(task, commentTimes.get(task.id) ?? []);
+      return shouldArchive({ status: task.status, lastWorkedAt }, now);
+    });
+    if (!due) return;
+    await commit((draft) => {
       const stamp = now.toISOString();
       for (const task of draft.tasks) {
         const lastWorkedAt = latestWorkAt(task, commentTimes.get(task.id) ?? []);

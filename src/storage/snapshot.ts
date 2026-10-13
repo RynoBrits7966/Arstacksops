@@ -62,6 +62,41 @@ export function emptySnapshot(): Snapshot {
   return { version: 1, nextSeq: 1, users: [], projects: [], tasks: [], comments: [], attachments: [] };
 }
 
+/** Keep a local edit when the shared board moved on, without dropping anyone else's records. */
+export function rebaseSnapshot(base: Snapshot, local: Snapshot, server: Snapshot): Snapshot {
+  return {
+    ...server,
+    nextSeq: Math.max(server.nextSeq, local.nextSeq),
+    users: server.users,
+    projects: rebaseRecords(base.projects, local.projects, server.projects),
+    tasks: rebaseRecords(base.tasks, local.tasks, server.tasks),
+    comments: rebaseRecords(base.comments, local.comments, server.comments),
+    attachments: rebaseRecords(base.attachments, local.attachments, server.attachments),
+  };
+}
+
+function rebaseRecords<T extends { id: string }>(base: T[], local: T[], server: T[]): T[] {
+  const baseById = new Map(base.map((item) => [item.id, item]));
+  const localById = new Map(local.map((item) => [item.id, item]));
+  const serverIds = new Set(server.map((item) => item.id));
+  const merged = server.flatMap((item) => {
+    const mine = localById.get(item.id);
+    const original = baseById.get(item.id);
+    if (!mine) return sameRecord(original, item) ? [] : [item];
+    if (!original || sameRecord(mine, original)) return [item];
+    if (sameRecord(item, original)) return [mine];
+    return [item];
+  });
+  for (const item of local) {
+    if (!serverIds.has(item.id) && !baseById.has(item.id)) merged.push(item);
+  }
+  return merged;
+}
+
+function sameRecord(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export async function blobToBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = "";

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { formatWhen } from "../format";
 import {
@@ -30,6 +30,10 @@ import { PlatformField } from "./PlatformField";
 import { Screenshots } from "./Screenshots";
 import { UserPicker } from "./UserPicker";
 
+export interface IssueLeaveHandle {
+  confirmLeave: () => Promise<boolean>;
+}
+
 interface IssueDetailsProps {
   task: Task;
   projects: Project[];
@@ -42,7 +46,7 @@ interface IssueDetailsProps {
   onRefresh: () => Promise<void>;
 }
 
-export function IssueDetails({
+export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(function IssueDetails({
   task,
   projects,
   users,
@@ -52,7 +56,7 @@ export function IssueDetails({
   onClose,
   onMoved,
   onRefresh,
-}: IssueDetailsProps) {
+}, ref) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [projectId, setProjectId] = useState(task.projectId);
@@ -73,6 +77,8 @@ export function IssueDetails({
   const [escalateOpen, setEscalateOpen] = useState(false);
   const [escalateToId, setEscalateToId] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const leaveResolver = useRef<((allowed: boolean) => void) | null>(null);
 
   useEffect(() => {
     setTitle(task.title);
@@ -139,8 +145,7 @@ export function IssueDetails({
     (status) => status === task.status || task.acceptedAt !== null || status !== "in_progress",
   );
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
+  async function persistIssue(): Promise<boolean> {
     setError(null);
     setSaving(true);
     try {
@@ -161,11 +166,64 @@ export function IssueDetails({
         actorId: currentUserId,
       });
       await onRefresh();
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not save the issue");
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    await persistIssue();
+  }
+
+  const leaveState = useRef({ dirty: false, saving: false, persistIssue });
+  leaveState.current = { dirty, saving, persistIssue };
+
+  useImperativeHandle(ref, () => ({
+    confirmLeave: () => {
+      if (leaveResolver.current || leaveState.current.saving) return Promise.resolve(false);
+      if (!leaveState.current.dirty) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        leaveResolver.current = resolve;
+        setLeaveOpen(true);
+      });
+    },
+  }));
+
+  useEffect(() => () => {
+    leaveResolver.current?.(false);
+    leaveResolver.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!leaveOpen) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setLeaveOpen(false);
+      const resolve = leaveResolver.current;
+      leaveResolver.current = null;
+      resolve?.(false);
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [leaveOpen]);
+
+  function settleLeave(allowed: boolean) {
+    setLeaveOpen(false);
+    const resolve = leaveResolver.current;
+    leaveResolver.current = null;
+    resolve?.(allowed);
+  }
+
+  async function saveAndLeave() {
+    const saved = await leaveState.current.persistIssue();
+    settleLeave(saved);
   }
 
   function chooseStatus(status: MovableStatus) {
@@ -455,6 +513,25 @@ export function IssueDetails({
           ))}
         </ul>
       </section>
+      {leaveOpen ? (
+        <div className="escalate-layer" role="presentation">
+          <div className="escalate-dialog" role="dialog" aria-labelledby="leave-heading">
+            <h2 id="leave-heading">Save changes to {ticketId}?</h2>
+            <p className="muted">Save or discard these edits before leaving this ticket.</p>
+            <div className="dialog-actions">
+              <button className="ghost" type="button" onClick={() => settleLeave(false)} disabled={saving}>
+                Cancel
+              </button>
+              <button className="quiet" type="button" onClick={() => settleLeave(true)} disabled={saving}>
+                Discard
+              </button>
+              <button className="primary" type="button" onClick={() => void saveAndLeave()} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {escalateOpen ? (
         <div className="escalate-layer" role="presentation">
           <div className="escalate-dialog" role="dialog" aria-labelledby="escalate-heading">
@@ -478,4 +555,4 @@ export function IssueDetails({
       ) : null}
     </aside>
   );
-}
+});

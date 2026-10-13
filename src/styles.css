@@ -945,6 +945,16 @@ option {
   white-space: pre-wrap;
 }
 
+.shot-open {
+  display: block;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .shot-list img {
   display: block;
   width: 100%;
@@ -953,7 +963,41 @@ option {
   background: var(--navy-deep);
   border: 1px solid var(--line);
   border-radius: 6px;
-  margin-bottom: 6px;
+}
+
+.shot-preview-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(6, 12, 24, 0.88);
+}
+
+.shot-preview {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(1100px, 100%);
+  height: min(100%, 900px);
+}
+
+.shot-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink);
+}
+
+.shot-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--navy-deep);
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 .upload-button {

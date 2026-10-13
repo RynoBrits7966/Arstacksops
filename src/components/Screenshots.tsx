@@ -16,6 +16,8 @@ export function Screenshots({ taskId }: ScreenshotsProps) {
   const [shots, setShots] = useState<Shot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [broken, setBroken] = useState<Record<string, boolean>>({});
+  const [preview, setPreview] = useState<Shot | null>(null);
   const urlsRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -39,10 +41,23 @@ export function Screenshots({ taskId }: ScreenshotsProps) {
       });
     return () => {
       cancelled = true;
+      setPreview(null);
       for (const url of urlsRef.current) URL.revokeObjectURL(url);
       urlsRef.current = [];
     };
   }, [taskId]);
+
+  useEffect(() => {
+    if (!preview) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setPreview(null);
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [preview]);
 
   async function handleChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -81,7 +96,22 @@ export function Screenshots({ taskId }: ScreenshotsProps) {
       <ul className="shot-list">
         {shots.map((shot) => (
           <li key={shot.id}>
-            <img src={shot.url} alt={shot.fileName} />
+            <button
+              className="shot-open"
+              type="button"
+              onClick={() => setPreview(shot)}
+              aria-label={`Open ${shot.fileName}`}
+            >
+              {broken[shot.id] ? (
+                <span className="form-error">Could not load {shot.fileName}.</span>
+              ) : (
+                <img
+                  src={shot.url}
+                  alt={shot.fileName}
+                  onError={() => setBroken((current) => ({ ...current, [shot.id]: true }))}
+                />
+              )}
+            </button>
             <span>
               {shot.fileName}
               <time dateTime={shot.createdAt}>{formatWhen(shot.createdAt)}</time>
@@ -89,6 +119,33 @@ export function Screenshots({ taskId }: ScreenshotsProps) {
           </li>
         ))}
       </ul>
+      {preview ? (
+        <div className="shot-preview-layer" role="presentation" onMouseDown={() => setPreview(null)}>
+          <div
+            className="shot-preview"
+            role="dialog"
+            aria-modal="true"
+            aria-label={preview.fileName}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="shot-preview-bar">
+              <p>{preview.fileName}</p>
+              <button className="ghost" type="button" onClick={() => setPreview(null)} autoFocus>
+                Close
+              </button>
+            </div>
+            {broken[preview.id] ? (
+              <p className="form-error">Could not open {preview.fileName}.</p>
+            ) : (
+              <img
+                src={preview.url}
+                alt={preview.fileName}
+                onError={() => setBroken((current) => ({ ...current, [preview.id]: true }))}
+              />
+            )}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

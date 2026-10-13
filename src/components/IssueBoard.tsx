@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { descendantIds } from "../backlog/model";
 import { formatWhen } from "../format";
@@ -29,7 +29,7 @@ import type {
   TaskStatus,
   User,
 } from "../types";
-import { IssueDetails } from "./IssueDetails";
+import { IssueDetails, type IssueLeaveHandle } from "./IssueDetails";
 import { PlatformField } from "./PlatformField";
 
 const FILTER_KEY = "arstacksops.issue.filters";
@@ -111,6 +111,12 @@ export function IssueBoard({
   const [filters, setFilters] = useState<StoredFilters>(readFilters);
   const [sort, setSort] = useState<IssueSort | null>(loadSort);
   const [creating, setCreating] = useState(false);
+  const leaveRef = useRef<IssueLeaveHandle>(null);
+
+  async function allowLeave() {
+    if (!leaveRef.current) return true;
+    return leaveRef.current.confirmLeave();
+  }
 
   useEffect(() => {
     if (sort) localStorage.setItem(SORT_KEY, JSON.stringify(sort));
@@ -125,8 +131,9 @@ export function IssueBoard({
     });
   }
 
-  function openTicket(id: string) {
-    if (selectedId && id !== selectedId) return;
+  async function openTicket(id: string) {
+    if (id === selectedId) return;
+    if (!(await allowLeave())) return;
     onSelect(id);
   }
 
@@ -199,8 +206,11 @@ export function IssueBoard({
               role="tab"
               aria-selected={tab === status}
               onClick={() => {
-                if (selected && selected.status !== status) onSelect(null);
-                onTab(status);
+                void (async () => {
+                  if (selected && selected.status !== status && !(await allowLeave())) return;
+                  if (selected && selected.status !== status) onSelect(null);
+                  onTab(status);
+                })();
               }}
             >
               {STATUS_LABELS[status]}
@@ -250,8 +260,11 @@ export function IssueBoard({
             value={tab}
             onChange={(event) => {
               const status = event.target.value as TaskStatus;
-              if (selected && selected.status !== status) onSelect(null);
-              onTab(status);
+              void (async () => {
+                if (selected && selected.status !== status && !(await allowLeave())) return;
+                if (selected && selected.status !== status) onSelect(null);
+                onTab(status);
+              })();
             }}
           >
             {TAB_ORDER.map((status) => (
@@ -322,7 +335,7 @@ export function IssueBoard({
                     currentUserId={currentUserId}
                     selected={task.id === selectedId}
                     unread={unreadTaskIds.has(task.id)}
-                    onOpen={() => openTicket(task.id)}
+                    onOpen={() => void openTicket(task.id)}
                   />
                 ))}
               </ul>
@@ -337,13 +350,19 @@ export function IssueBoard({
         {selected ? (
           <IssueDetails
             key={selected.id}
+            ref={leaveRef}
             task={selected}
             projects={projects}
             users={users}
             currentUserId={currentUserId}
             comments={comments}
             linkedCount={descendantIds(tasks, selected.id).length}
-            onClose={() => onSelect(null)}
+            onClose={() => {
+              void (async () => {
+                if (!(await allowLeave())) return;
+                onSelect(null);
+              })();
+            }}
             onMoved={async (status) => {
               onTab(status);
               await onChanged();

@@ -62,11 +62,10 @@ button:disabled {
 .sidebar {
   background: var(--navy-side);
   color: var(--ink);
-  overflow: auto;
-  padding: 16px 12px 28px;
+  overflow: hidden;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
   border-right: 1px solid var(--line);
 }
 
@@ -136,16 +135,23 @@ button:disabled {
 }
 
 .side-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 3;
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  margin: -16px -12px 0;
-  padding: 16px 12px 10px;
+  padding: 16px 12px 12px;
   background: var(--navy-side);
   border-bottom: 1px solid var(--line);
+}
+
+.side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 12px 28px;
 }
 
 .side-tabs {
@@ -1016,8 +1022,14 @@ option {
     min-height: 100vh;
   }
 
-  .sidebar {
+  .sidebar,
+  .side-scroll {
     overflow: visible;
+    min-height: auto;
+  }
+
+  .side-scroll {
+    flex: none;
   }
 
   main {

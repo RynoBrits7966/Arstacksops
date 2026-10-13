@@ -93,6 +93,7 @@ export function ProjectSidebar({
         {notice ? <p className="project-meta">{notice}</p> : null}
       </div>
 
+      <div className="side-scroll">
       {adding ? (
         <ProjectFields
           submitLabel="Save project"
@@ -191,6 +192,7 @@ export function ProjectSidebar({
           />
         </section>
       ) : null}
+      </div>
     </aside>
   );
 }

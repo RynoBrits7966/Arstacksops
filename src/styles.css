@@ -1013,6 +1013,28 @@ option {
   cursor: pointer;
 }
 
+.create-shots {
+  display: grid;
+  gap: 8px;
+}
+
+.create-shot-list {
+  margin-top: 0;
+}
+
+.create-shot-list li {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.create-shot-list img {
+  width: 72px;
+  height: 54px;
+  max-height: 54px;
+}
+
 .escalate-layer {
   position: fixed;
   inset: 0;
@@ -1861,6 +1883,14 @@ option {
 
 .issue-details-head {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.issue-details-top {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -1869,7 +1899,27 @@ option {
 .issue-details-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.accept-action {
+  min-width: 8.5rem;
+  padding: 8px 22px;
+}
+
+.issue-details-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ticket-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .issue-details-actions .back-link {

@@ -11,6 +11,7 @@ import { AuthRequiredError, closeWorkspace, taskStore } from "./storage/localSto
 import type { Comment, Project, Task, TaskStatus, User } from "./types";
 
 const VIEW_KEY = "arstacksops.view";
+const BOARD_REFRESH_MS = 60 * 60 * 1000;
 
 type WorkspaceView = "work" | "backlog" | "stats";
 
@@ -81,6 +82,40 @@ export function App() {
       });
     return () => {
       cancelled = true;
+    };
+  }, [refresh, session]);
+
+  useEffect(() => {
+    if (!session) return;
+    let lastRefresh = Date.now();
+    let running = false;
+    async function pull() {
+      if (running) return;
+      running = true;
+      try {
+        await refresh();
+        lastRefresh = Date.now();
+      } catch (caught: unknown) {
+        if (caught instanceof AuthRequiredError) {
+          closeWorkspace();
+          setSession(null);
+        }
+      } finally {
+        running = false;
+      }
+    }
+    const timer = window.setInterval(() => {
+      void pull();
+    }, BOARD_REFRESH_MS);
+    function onVisible() {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastRefresh < BOARD_REFRESH_MS) return;
+      void pull();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh, session]);
 

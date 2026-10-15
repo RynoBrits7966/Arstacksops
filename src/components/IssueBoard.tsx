@@ -466,6 +466,14 @@ function IssueRow({
   );
 }
 
+const MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
+
+interface PendingShot {
+  file: File;
+  url: string;
+}
+
 function CreateIssue({
   projects,
   users,
@@ -495,7 +503,15 @@ function CreateIssue({
   const [detailCategory, setDetailCategory] = useState<DetailCategory | "">("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [shots, setShots] = useState<PendingShot[]>([]);
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const shotsRef = useRef(shots);
+  shotsRef.current = shots;
   const projectName = projects.find((item) => item.id === projectId)?.name.trim();
+
+  useEffect(() => () => {
+    for (const shot of shotsRef.current) URL.revokeObjectURL(shot.url);
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -509,27 +525,69 @@ function CreateIssue({
     }
     setBusy(true);
     setError(null);
+    let id = createdId;
     try {
-      await taskStore.createIssue({
-        title,
-        description,
-        projectId,
-        assigneeId,
-        issueType,
-        platforms,
-        issueSeverity,
-        stepsToReproduce: steps,
-        expectedBehaviour: expected,
-        actualBehaviour: actual,
-        affectedArea,
-        detailCategory: detailCategory || null,
-        actorId: currentUserId,
-      });
+      if (!id) {
+        const created = await taskStore.createIssue({
+          title,
+          description,
+          projectId,
+          assigneeId,
+          issueType,
+          platforms,
+          issueSeverity,
+          stepsToReproduce: steps,
+          expectedBehaviour: expected,
+          actualBehaviour: actual,
+          affectedArea,
+          detailCategory: detailCategory || null,
+          actorId: currentUserId,
+        });
+        id = created.id;
+        setCreatedId(id);
+      }
+      const remaining = [...shots];
+      while (remaining.length > 0) {
+        const shot = remaining[0];
+        await taskStore.addAttachment(id, shot.file);
+        URL.revokeObjectURL(shot.url);
+        remaining.shift();
+        setShots([...remaining]);
+      }
       await onCreated();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create the issue");
+      const message = caught instanceof Error ? caught.message : "Could not create the issue";
+      setError(id ? `The ticket was created, but a screenshot could not be added. ${message}` : message);
       setBusy(false);
     }
+  }
+
+  function addShots(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    const accepted: PendingShot[] = [];
+    const rejected: string[] = [];
+    for (const file of list) {
+      const image = file.type.startsWith("image/") || IMAGE_FILE.test(file.name);
+      if (!image) {
+        rejected.push(`${file.name} is not an image.`);
+        continue;
+      }
+      if (file.size > MAX_SCREENSHOT_BYTES) {
+        rejected.push(`${file.name} is larger than 8 MB.`);
+        continue;
+      }
+      accepted.push({ file, url: URL.createObjectURL(file) });
+    }
+    if (rejected.length > 0) setError(rejected.join(" "));
+    if (accepted.length > 0) setShots((current) => [...current, ...accepted]);
+  }
+
+  function removeShot(url: string) {
+    setShots((current) => {
+      const shot = current.find((item) => item.url === url);
+      if (shot) URL.revokeObjectURL(shot.url);
+      return current.filter((item) => item.url !== url);
+    });
   }
 
   return (
@@ -652,6 +710,34 @@ function CreateIssue({
             <p className="muted">Reproduction steps and visual details appear here when the type needs them.</p>
           ) : null}
         </details>
+        <div className="create-shots">
+          <label className="upload-button">
+            Add screenshot
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              disabled={busy}
+              onChange={(event) => {
+                addShots(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {shots.length > 0 ? (
+            <ul className="shot-list create-shot-list">
+              {shots.map((shot) => (
+                <li key={shot.url}>
+                  <img src={shot.url} alt="" />
+                  <span>{shot.file.name}</span>
+                  <button className="quiet" type="button" onClick={() => removeShot(shot.url)} disabled={busy}>
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
         <div className="dialog-actions">
           <button className="primary" type="submit" disabled={busy}>
             {busy ? "Adding…" : "Create issue"}

@@ -79,8 +79,10 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
   const [expanded, setExpanded] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const leaveResolver = useRef<((allowed: boolean) => void) | null>(null);
+  const dirtyRef = useRef(false);
 
   useEffect(() => {
+    if (dirtyRef.current) return;
     setTitle(task.title);
     setDescription(task.description);
     setProjectId(task.projectId);
@@ -141,6 +143,8 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
     affectedArea.trim() !== task.affectedArea ||
     (detailCategory || null) !== task.detailCategory ||
     JSON.stringify(checklist) !== JSON.stringify(task.checklist);
+  dirtyRef.current = dirty;
+  const canAccept = task.status !== "archived" && !task.acceptedAt && currentUserId === task.assigneeId;
   const stateOptions = MOVE_TARGETS.filter(
     (status) => status === task.status || task.acceptedAt !== null || status !== "in_progress",
   );
@@ -303,18 +307,28 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
     <aside className={expanded ? "issue-details is-expanded" : "issue-details"} aria-label="Issue details">
       <form onSubmit={save}>
         <div className="issue-details-head">
-          <div className="issue-details-actions">
-            <button className="back-link" type="button" onClick={onClose}>
-              Close
-            </button>
-            <button className="quiet" type="button" aria-pressed={expanded} onClick={() => setExpanded((open) => !open)}>
-              {expanded ? "Exit full screen" : "Full screen"}
+          <div className="issue-details-top">
+            <div className="issue-details-actions">
+              <button className="back-link" type="button" onClick={onClose}>
+                Close
+              </button>
+              <button className="quiet" type="button" aria-pressed={expanded} onClick={() => setExpanded((open) => !open)}>
+                {expanded ? "Exit full screen" : "Full screen"}
+              </button>
+              {canAccept ? (
+                <button className="primary accept-action" type="button" onClick={accept} disabled={busy}>
+                  Accept
+                </button>
+              ) : null}
+            </div>
+            <button className="primary" type="submit" disabled={saving || busy || !dirty}>
+              {saving ? "Saving…" : dirty ? "Save" : "Saved"}
             </button>
           </div>
-          <p className="ticket-id ticket-id-large">{ticketId}</p>
-          <button className="primary" type="submit" disabled={saving || busy || !dirty}>
-            {saving ? "Saving…" : dirty ? "Save" : "Saved"}
-          </button>
+          <div className="issue-details-name">
+            <p className="ticket-id ticket-id-large">{ticketId}</p>
+            <p className="ticket-name">{title.trim() || "Untitled ticket"}</p>
+          </div>
         </div>
         {error ? <p className="form-error">{error}</p> : null}
         <label>
@@ -386,14 +400,8 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
           </label>
         </div>
         <PlatformField value={platforms} onChange={setPlatforms} />
-        {task.status !== "archived" && !task.acceptedAt ? (
-          currentUserId === task.assigneeId ? (
-            <button className="primary compact" type="button" onClick={accept} disabled={busy}>
-              Accept
-            </button>
-          ) : (
-            <p className="muted">Switch to {assignee?.name ?? "the assignee"} to accept. That moves it to In Progress.</p>
-          )
+        {task.status !== "archived" && !task.acceptedAt && !canAccept ? (
+          <p className="muted">Switch to {assignee?.name ?? "the assignee"} to accept. That moves it to In Progress.</p>
         ) : null}
         {task.status !== "archived" ? (
           <p className="idle-left">

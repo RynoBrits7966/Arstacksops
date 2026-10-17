@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { descendantIds } from "../backlog/model";
 import { formatWhen } from "../format";
 import {
@@ -132,9 +132,8 @@ export function IssueBoard({
   }
 
   async function openTicket(id: string) {
-    if (id === selectedId) return;
     if (!(await allowLeave())) return;
-    onSelect(id);
+    onSelect(id === selectedId ? null : id);
   }
 
   function updateFilters(patch: Partial<StoredFilters>) {
@@ -287,7 +286,7 @@ export function IssueBoard({
         </label>
       </div>
       <p className="tab-note">{TAB_NOTES[tab]}</p>
-      <div className={selected ? "issue-layout with-detail" : "issue-layout"}>
+      <div className="issue-layout">
         <div className="issue-table-wrap">
           {visible.length === 0 ? (
             <div className="empty-state">
@@ -336,7 +335,33 @@ export function IssueBoard({
                     selected={task.id === selectedId}
                     unread={unreadTaskIds.has(task.id)}
                     onOpen={() => void openTicket(task.id)}
-                  />
+                  >
+                    {selected && task.id === selected.id ? (
+                      <div className="issue-drop">
+                        <IssueDetails
+                          key={selected.id}
+                          ref={leaveRef}
+                          task={selected}
+                          projects={projects}
+                          users={users}
+                          currentUserId={currentUserId}
+                          comments={comments}
+                          linkedCount={descendantIds(tasks, selected.id).length}
+                          onClose={() => {
+                            void (async () => {
+                              if (!(await allowLeave())) return;
+                              onSelect(null);
+                            })();
+                          }}
+                          onMoved={async (status) => {
+                            onTab(status);
+                            await onChanged();
+                          }}
+                          onRefresh={onChanged}
+                        />
+                      </div>
+                    ) : null}
+                  </IssueRow>
                 ))}
               </ul>
             </div>
@@ -347,29 +372,6 @@ export function IssueBoard({
             </p>
           ) : null}
         </div>
-        {selected ? (
-          <IssueDetails
-            key={selected.id}
-            ref={leaveRef}
-            task={selected}
-            projects={projects}
-            users={users}
-            currentUserId={currentUserId}
-            comments={comments}
-            linkedCount={descendantIds(tasks, selected.id).length}
-            onClose={() => {
-              void (async () => {
-                if (!(await allowLeave())) return;
-                onSelect(null);
-              })();
-            }}
-            onMoved={async (status) => {
-              onTab(status);
-              await onChanged();
-            }}
-            onRefresh={onChanged}
-          />
-        ) : null}
       </div>
       {creating ? (
         <CreateIssue
@@ -398,6 +400,7 @@ function IssueRow({
   selected,
   unread,
   onOpen,
+  children,
 }: {
   task: Task;
   projects: Project[];
@@ -406,6 +409,7 @@ function IssueRow({
   selected: boolean;
   unread: boolean;
   onOpen: () => void;
+  children?: ReactNode;
 }) {
   const project = projects.find((item) => item.id === task.projectId);
   const assignee = users.find((user) => user.id === task.assigneeId);
@@ -418,10 +422,11 @@ function IssueRow({
       ? "This was escalated to you"
       : "A tagged teammate has not read a comment";
   return (
-    <li role="row">
+    <li className={selected ? "issue-entry is-open" : "issue-entry"} role="row">
       <button
         className={`issue-row${selected ? " selected" : ""}${parked ? " needs-visit" : ""}`}
         type="button"
+        aria-expanded={selected}
         onClick={onOpen}
       >
         <span className="issue-title">
@@ -462,6 +467,7 @@ function IssueRow({
         </span>
         <span>{formatWhen(task.updatedAt)}</span>
       </button>
+      {children}
     </li>
   );
 }

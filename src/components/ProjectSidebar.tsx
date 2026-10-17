@@ -21,6 +21,7 @@ interface ProjectSidebarProps {
   selectedId: string | "all";
   onSelect: (id: string | "all") => void;
   onChanged: () => Promise<void>;
+  onCollapse: () => void;
 }
 
 export function ProjectSidebar({
@@ -31,6 +32,7 @@ export function ProjectSidebar({
   selectedId,
   onSelect,
   onChanged,
+  onCollapse,
 }: ProjectSidebarProps) {
   const [adding, setAdding] = useState(false);
   const [list, setList] = useState<"active" | "completed">("active");
@@ -51,6 +53,9 @@ export function ProjectSidebar({
             <h1>ARStacksOps</h1>
             <p>Work items</p>
           </div>
+          <button className="menu-toggle" type="button" onClick={onCollapse}>
+            Hide
+          </button>
         </div>
 
         <div className="signed-in">

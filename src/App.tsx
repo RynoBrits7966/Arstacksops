@@ -11,6 +11,7 @@ import { AuthRequiredError, closeWorkspace, taskStore } from "./storage/localSto
 import type { Comment, Project, Task, TaskStatus, User } from "./types";
 
 const VIEW_KEY = "arstacksops.view";
+const MENU_KEY = "arstacksops.menu";
 const BOARD_REFRESH_MS = 60 * 60 * 1000;
 
 type WorkspaceView = "work" | "backlog" | "stats";
@@ -19,6 +20,10 @@ function storedView(): WorkspaceView {
   const stored = localStorage.getItem(VIEW_KEY);
   if (stored === "backlog" || stored === "stats") return stored;
   return "work";
+}
+
+function storedMenuCollapsed(): boolean {
+  return localStorage.getItem(MENU_KEY) === "collapsed";
 }
 
 export function App() {
@@ -32,6 +37,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [backlogSelectedId, setBacklogSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<WorkspaceView>(storedView);
+  const [menuCollapsed, setMenuCollapsed] = useState(storedMenuCollapsed);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -151,6 +157,11 @@ export function App() {
     setView(next);
   }
 
+  function chooseMenu(collapsed: boolean) {
+    localStorage.setItem(MENU_KEY, collapsed ? "collapsed" : "open");
+    setMenuCollapsed(collapsed);
+  }
+
   const params = new URLSearchParams(window.location.search);
   const resetToken = params.get("token");
   const notice = params.get("verified") === "1" ? "Email confirmed. Sign in to open the board." : null;
@@ -173,12 +184,13 @@ export function App() {
   }
 
   return (
-    <div className="app">
+    <div className={menuCollapsed ? "app menu-collapsed" : "app"}>
       <ProjectSidebar
         projects={projects}
         tasks={tasks}
         sessionName={session.name}
         onSignOut={() => void signOut()}
+        onCollapse={() => chooseMenu(true)}
         selectedId={projectFilter}
         onSelect={(id) => {
           setProjectFilter(id);
@@ -189,6 +201,12 @@ export function App() {
       />
       <div className={view === "backlog" ? "workspace backlog-mode" : "workspace"}>
         <div className="board-bar">
+          <div className="board-bar-start">
+            {menuCollapsed ? (
+              <button className="menu-toggle" type="button" onClick={() => chooseMenu(false)}>
+                Menu
+              </button>
+            ) : null}
           <div className="view-switch" role="tablist" aria-label="Workspace view">
             <button
               className={view === "work" ? "tab active" : "tab"}
@@ -217,6 +235,7 @@ export function App() {
             >
               Statistics
             </button>
+          </div>
           </div>
         </div>
         {error ? <p className="form-error banner">{error}</p> : null}

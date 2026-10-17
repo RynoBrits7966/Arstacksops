@@ -59,6 +59,18 @@ button:disabled {
   background: var(--navy);
 }
 
+.app.menu-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app.menu-collapsed .sidebar {
+  display: none;
+}
+
+.app.menu-collapsed .issue-details.is-expanded {
+  left: 0;
+}
+
 .sidebar {
   background: var(--navy-side);
   color: var(--ink);
@@ -74,6 +86,28 @@ button:disabled {
   align-items: center;
   gap: 10px;
   padding: 4px 6px 8px;
+}
+
+.menu-toggle {
+  flex: none;
+  margin-left: auto;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  border: 1px solid var(--line);
+  background: var(--navy-field);
+  color: var(--ink);
+}
+
+.board-bar .menu-toggle {
+  margin-left: 0;
+}
+
+.board-bar-start {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .brand img {

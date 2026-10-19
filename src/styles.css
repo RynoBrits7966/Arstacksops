@@ -1065,25 +1065,72 @@ option {
 
 .upload-button {
   position: relative;
-  display: inline-flex;
-  align-items: center;
+  display: inline-grid;
   width: fit-content;
   margin: 0;
-  overflow: hidden;
+  padding: 0;
+  overflow: visible;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--navy-field);
+  color: var(--ink);
   cursor: pointer;
 }
 
+.upload-button span {
+  grid-area: 1 / 1;
+  padding: 8px 14px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 .upload-button input {
-  position: absolute;
-  inset: 0;
+  grid-area: 1 / 1;
   z-index: 1;
-  width: 100%;
-  height: 100%;
+  width: 0;
+  height: 0;
+  min-width: 100%;
+  min-height: 100%;
   margin: 0;
   padding: 0;
-  opacity: 0.02;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: transparent;
+  font-size: 0;
   cursor: pointer;
-  font-size: 16px;
+}
+
+.upload-button input:focus {
+  outline: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.upload-button:focus-within {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+  border-color: var(--orange);
+}
+
+.upload-button input::file-selector-button,
+.upload-button input::-webkit-file-upload-button {
+  width: 100%;
+  height: 100%;
+  min-height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.upload-button:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .create-shots {
@@ -1132,6 +1179,48 @@ option {
 
 .escalate-dialog .muted {
   margin-bottom: 14px;
+}
+
+.accept-dialog {
+  width: min(560px, calc(100vw - 32px));
+  margin: auto;
+  padding: 32px 28px 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--navy-raise);
+  color: var(--ink);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.accept-dialog::backdrop {
+  background: rgba(6, 12, 24, 0.84);
+}
+
+.accept-dialog h2 {
+  margin: 8px 0 10px;
+  font-size: 1.7rem;
+  line-height: 1.2;
+}
+
+.accept-dialog .ticket-name {
+  font-size: 1.05rem;
+  margin-bottom: 12px;
+}
+
+.accept-dialog .muted {
+  margin-bottom: 8px;
+}
+
+.accept-confirm {
+  width: 100%;
+  margin-top: 18px;
+  padding: 16px 22px;
+  font-size: 1.15rem;
+}
+
+.accept-cancel {
+  width: 100%;
+  margin-top: 8px;
 }
 
 @media (max-width: 980px) {

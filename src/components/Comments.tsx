@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import { UserPicker } from "./UserPicker";
 import { VoiceNoteField, VoicePlayer } from "./VoiceNoteField";
 import { formatWhen } from "../format";
@@ -12,9 +12,10 @@ interface CommentsProps {
   users: User[];
   currentUserId: string;
   onChanged: () => Promise<void>;
+  onScreenshot?: () => void;
 }
 
-export function Comments({ taskId, users, currentUserId, onChanged }: CommentsProps) {
+export function Comments({ taskId, users, currentUserId, onChanged, onScreenshot }: CommentsProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [body, setBody] = useState("");
   const [mentionIds, setMentionIds] = useState<string[]>([]);
@@ -22,6 +23,7 @@ export function Comments({ taskId, users, currentUserId, onChanged }: CommentsPr
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -57,6 +59,23 @@ export function Comments({ taskId, users, currentUserId, onChanged }: CommentsPr
       );
       return [...current, user.id];
     });
+  }
+
+  async function addScreenshot(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError(null);
+    setUploading(true);
+    try {
+      await taskStore.addAttachment(taskId, file);
+      onScreenshot?.();
+      await onChanged();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not upload the screenshot");
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -111,10 +130,20 @@ export function Comments({ taskId, users, currentUserId, onChanged }: CommentsPr
         />
         {error ? <p className="form-error">{error}</p> : null}
         <div className="form-actions">
+          <label className="upload-button">
+            <span>{uploading ? "Uploading…" : "Add screenshot"}</span>
+            <input
+              type="file"
+              aria-label="Add screenshot"
+              accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/heic,image/heif,.png,.jpg,.jpeg,.gif,.webp,.bmp,.heic,.heif"
+              disabled={busy || uploading || recording}
+              onChange={(event) => void addScreenshot(event)}
+            />
+          </label>
           <button
             className="primary"
             type="submit"
-            disabled={busy || recording || !currentUserId || (!body.trim() && !voice)}
+            disabled={busy || uploading || recording || !currentUserId || (!body.trim() && !voice)}
           >
             {busy ? "Saving…" : "Add comment"}
           </button>

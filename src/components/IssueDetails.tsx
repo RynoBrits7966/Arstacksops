@@ -78,6 +78,9 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
   const [escalateToId, setEscalateToId] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [acceptOpen, setAcceptOpen] = useState(false);
+  const [shotsVersion, setShotsVersion] = useState(0);
+  const acceptDialogRef = useRef<HTMLDialogElement>(null);
   const leaveResolver = useRef<((allowed: boolean) => void) | null>(null);
   const dirtyRef = useRef(false);
 
@@ -267,11 +270,22 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
     }
   }
 
-  async function accept() {
+  useEffect(() => {
+    const dialog = acceptDialogRef.current;
+    if (!dialog) return;
+    if (acceptOpen && !dialog.open) dialog.showModal();
+    if (!acceptOpen && dialog.open) dialog.close();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [acceptOpen]);
+
+  async function confirmAccept() {
     setBusy(true);
     setError(null);
     try {
       await taskStore.acceptTask(task.id, currentUserId);
+      setAcceptOpen(false);
       await onMoved("in_progress");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not accept the issue");
@@ -316,7 +330,15 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
                 {expanded ? "Exit full screen" : "Full screen"}
               </button>
               {canAccept ? (
-                <button className="primary accept-action" type="button" onClick={accept} disabled={busy}>
+                <button
+                  className="primary accept-action"
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setAcceptOpen(true);
+                  }}
+                  disabled={busy}
+                >
                   Accept
                 </button>
               ) : null}
@@ -507,8 +529,14 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
           Delete issue
         </button>
       </form>
-      <Screenshots taskId={task.id} />
-      <Comments taskId={task.id} users={users} currentUserId={currentUserId} onChanged={onRefresh} />
+      <Screenshots taskId={task.id} reloadKey={shotsVersion} />
+      <Comments
+        taskId={task.id}
+        users={users}
+        currentUserId={currentUserId}
+        onChanged={onRefresh}
+        onScreenshot={() => setShotsVersion((version) => version + 1)}
+      />
       <section className="issue-extra">
         <h3>Activity</h3>
         {task.activity.length === 0 ? <p className="muted">No activity yet.</p> : null}
@@ -540,6 +568,26 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
           </div>
         </div>
       ) : null}
+      <dialog
+        ref={acceptDialogRef}
+        className="accept-dialog"
+        aria-labelledby="accept-heading"
+        onCancel={(event) => event.preventDefault()}
+      >
+        <p className="ticket-id">{ticketId}</p>
+        <h2 id="accept-heading">Accept this ticket?</h2>
+        <p className="ticket-name">{title.trim() || "Untitled ticket"}</p>
+        <p className="muted">
+          Click Accept ticket to move it to In Progress. The rest of the board stays blocked until you choose.
+        </p>
+        {error ? <p className="form-error">{error}</p> : null}
+        <button className="primary accept-confirm" type="button" onClick={() => void confirmAccept()} disabled={busy}>
+          {busy ? "Accepting…" : "Accept ticket"}
+        </button>
+        <button className="ghost accept-cancel" type="button" onClick={() => setAcceptOpen(false)} disabled={busy}>
+          Not now
+        </button>
+      </dialog>
       {escalateOpen ? (
         <div className="escalate-layer" role="presentation">
           <div className="escalate-dialog" role="dialog" aria-labelledby="escalate-heading">

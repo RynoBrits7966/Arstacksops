@@ -718,9 +718,10 @@ function CreateIssue({
         </details>
         <div className="create-shots">
           <label className="upload-button">
-            Add screenshot
+            <span>Add screenshot</span>
             <input
               type="file"
+              aria-label="Add screenshot"
               accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/heic,image/heif,.png,.jpg,.jpeg,.gif,.webp,.bmp,.heic,.heif"
               multiple
               disabled={busy}

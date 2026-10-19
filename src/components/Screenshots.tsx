@@ -10,9 +10,10 @@ interface Shot extends Attachment {
 
 interface ScreenshotsProps {
   taskId: string;
+  reloadKey?: number;
 }
 
-export function Screenshots({ taskId }: ScreenshotsProps) {
+export function Screenshots({ taskId, reloadKey = 0 }: ScreenshotsProps) {
   const [shots, setShots] = useState<Shot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,7 +46,7 @@ export function Screenshots({ taskId }: ScreenshotsProps) {
       for (const url of urlsRef.current) URL.revokeObjectURL(url);
       urlsRef.current = [];
     };
-  }, [taskId]);
+  }, [taskId, reloadKey]);
 
   useEffect(() => {
     if (!preview) return;
@@ -82,9 +83,10 @@ export function Screenshots({ taskId }: ScreenshotsProps) {
       <div className="panel-heading">
         <h2 id="screenshots-heading">Screenshots</h2>
         <label className="upload-button">
-          {busy ? "Uploading…" : "Upload screenshot"}
+          <span>{busy ? "Uploading…" : "Upload screenshot"}</span>
           <input
             type="file"
+            aria-label="Upload screenshot"
             accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/heic,image/heif,.png,.jpg,.jpeg,.gif,.webp,.bmp,.heic,.heif"
             onChange={handleChange}
             disabled={busy}

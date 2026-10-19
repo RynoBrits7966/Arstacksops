@@ -85,7 +85,7 @@ export function Screenshots({ taskId }: ScreenshotsProps) {
           {busy ? "Uploading…" : "Upload screenshot"}
           <input
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/heic,image/heif,.png,.jpg,.jpeg,.gif,.webp,.bmp,.heic,.heif"
             onChange={handleChange}
             disabled={busy}
           />

@@ -73,19 +73,20 @@ button:disabled {
 
 .app.menu-collapsed .issue-table {
   width: 100%;
+  min-width: max-content;
 }
 
 .app.menu-collapsed .issue-head,
 .app.menu-collapsed .issue-row {
   grid-template-columns:
-    minmax(220px, 2.2fr)
-    minmax(128px, 1fr)
-    minmax(148px, 1.15fr)
-    minmax(96px, 0.75fr)
-    minmax(108px, 0.85fr)
-    minmax(128px, 1fr)
-    minmax(136px, 1.05fr)
-    minmax(140px, 1fr);
+    minmax(28rem, 2.6fr)
+    minmax(9rem, 1fr)
+    minmax(10rem, 1.15fr)
+    minmax(6.5rem, 0.75fr)
+    minmax(7rem, 0.85fr)
+    minmax(8rem, 1fr)
+    minmax(9rem, 1.05fr)
+    minmax(9rem, 1fr);
 }
 
 .app.menu-collapsed .issue-details {
@@ -581,6 +582,7 @@ select {
   border-radius: 6px;
   background: var(--navy-field);
   color: var(--ink);
+  caret-color: var(--orange);
   padding: 8px 10px;
 }
 
@@ -590,6 +592,8 @@ select:focus,
 button:focus-visible {
   outline: 2px solid var(--orange);
   outline-offset: 2px;
+  border-color: var(--orange);
+  box-shadow: inset 0 0 0 1px var(--orange);
 }
 
 option {
@@ -1061,15 +1065,25 @@ option {
 
 .upload-button {
   position: relative;
+  display: inline-flex;
+  align-items: center;
   width: fit-content;
   margin: 0;
+  overflow: hidden;
+  cursor: pointer;
 }
 
 .upload-button input {
   position: absolute;
   inset: 0;
-  opacity: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0.02;
   cursor: pointer;
+  font-size: 16px;
 }
 
 .create-shots {
@@ -1740,7 +1754,7 @@ option {
 .issue-head,
 .issue-row {
   display: grid;
-  grid-template-columns: minmax(300px, 1.8fr) 168px 176px 124px 140px 168px 176px 184px;
+  grid-template-columns: minmax(26rem, 1.8fr) 168px 176px 124px 140px 168px 176px 184px;
   column-gap: 20px;
   align-items: center;
   text-align: left;
@@ -1825,17 +1839,19 @@ option {
 
 .issue-title {
   display: grid;
-  grid-template-columns: 9rem minmax(0, 1fr) auto;
-  column-gap: 20px;
+  grid-template-columns: max-content minmax(12rem, 1fr) auto;
+  column-gap: 12px;
   align-items: center;
   min-width: 0;
 }
 
 .issue-title span:nth-child(2) {
-  min-width: 0;
+  min-width: 12rem;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
 }
 
 .ticket-id {
@@ -1845,7 +1861,7 @@ option {
 }
 
 .issue-title .ticket-id {
-  width: 9rem;
+  width: auto;
 }
 
 .ticket-id-large {

@@ -213,7 +213,12 @@ export function BacklogDetails({ task, tasks, projects, users, currentUserId, se
   const rynoMustAccept = isRyno(sessionEmail) && task.status !== "archived" && !task.acceptedAt;
   const canRemoveArchive = task.status === "archived" && isBarend(sessionEmail);
   const stateOptions = MOVE_TARGETS.filter(
-    (status) => status === task.status || !needsAccept || task.acceptedAt !== null || status !== "in_progress",
+    (status) =>
+      (task.status === "archived" && canRemoveArchive) ||
+      status === task.status ||
+      !needsAccept ||
+      task.acceptedAt !== null ||
+      status !== "in_progress",
   );
 
   if (rynoMustAccept) {
@@ -267,11 +272,15 @@ export function BacklogDetails({ task, tasks, projects, users, currentUserId, se
           <label>
             State
             <select
-              value={task.status === "archived" ? "" : task.status}
-              disabled={busy || task.status === "archived"}
-              onChange={(event) => changeState(event.target.value as (typeof MOVE_TARGETS)[number])}
+              value={task.status}
+              disabled={busy || (task.status === "archived" && !canRemoveArchive)}
+              onChange={(event) => {
+                const status = event.target.value as (typeof MOVE_TARGETS)[number];
+                if (status === task.status) return;
+                changeState(status);
+              }}
             >
-              {task.status === "archived" ? <option value="">Archive</option> : null}
+              {task.status === "archived" ? <option value="archived">Archive</option> : null}
               {stateOptions.map((status) => (
                 <option key={status} value={status}>
                   {STATUS_LABELS[status]}
@@ -508,7 +517,7 @@ export function BacklogDetails({ task, tasks, projects, users, currentUserId, se
             <>
               <p>
                 {task.status === "archived"
-                  ? `Remove “${task.title}” from Archive? Comments and screenshots go with it.`
+                  ? `Delete “${task.title}”? It leaves the board. Comments and screenshots go with it.`
                   : nested.length > 0
                     ? `Delete “${task.title}” and ${nested.length} item${nested.length === 1 ? "" : "s"} nested under it? Their comments and screenshots are deleted too.`
                     : `Delete “${task.title}”? Its comments and screenshots are deleted too.`}

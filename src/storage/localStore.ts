@@ -736,12 +736,13 @@ function applyProjectMove(draft: Snapshot, task: Task, projectId: string) {
 }
 
 function applyStatus(task: Task, status: MovableStatus, now: Date) {
-  if (task.status === "archived") throw new Error("Archived tasks stay in Archive until you delete them");
   if (status === "escalated") throw new Error("Choose who to escalate this to");
   if (status === task.status) return;
   const moved = statusAfterMove(task.status, status, task.closedAt, now);
   task.status = moved.status;
   task.closedAt = moved.closedAt;
+  task.archivedAt = null;
+  task.archiveVisitedAt = null;
   task.escalatedToId = null;
   task.escalationSeenAt = null;
   task.lastWorkedAt = now.toISOString();
@@ -965,9 +966,6 @@ export const taskStore: TaskStore & {
     await ensure();
     return commit((draft) => {
       const task = requireTask(draft, id);
-      if (patch.status && task.status === "archived") {
-        throw new Error("Archived tasks stay in Archive until you delete them");
-      }
       const title = patch.title !== undefined ? patch.title.trim() : task.title;
       if (!title) throw new Error("Title is required");
       const now = new Date();
@@ -1092,7 +1090,6 @@ export const taskStore: TaskStore & {
     if (!userId) throw new Error("Choose who to escalate this to");
     return commit((draft) => {
       const task = requireTask(draft, id);
-      if (task.status === "archived") throw new Error("Archived tasks stay in Archive until you delete them");
       const user = draft.users.find((item) => item.id === userId);
       if (!user) throw new Error("Choose a teammate");
       const now = new Date();
@@ -1100,6 +1097,8 @@ export const taskStore: TaskStore & {
       const stamp = now.toISOString();
       task.status = moved.status;
       task.closedAt = moved.closedAt;
+      task.archivedAt = null;
+      task.archiveVisitedAt = null;
       task.escalatedToId = userId;
       task.escalationSeenAt = null;
       task.updatedAt = stamp;

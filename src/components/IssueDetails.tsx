@@ -155,7 +155,11 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
   const rynoMustAccept = isRyno(sessionEmail) && task.status !== "archived" && !task.acceptedAt;
   const canRemoveArchive = task.status === "archived" && isBarend(sessionEmail);
   const stateOptions = MOVE_TARGETS.filter(
-    (status) => status === task.status || task.acceptedAt !== null || status !== "in_progress",
+    (status) =>
+      (task.status === "archived" && canRemoveArchive) ||
+      status === task.status ||
+      task.acceptedAt !== null ||
+      status !== "in_progress",
   );
 
   async function persistIssue(): Promise<boolean> {
@@ -305,7 +309,7 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
         ? ` ${linkedCount} older linked record${linkedCount === 1 ? "" : "s"} stored under it will be removed as well.`
         : "";
     const question = task.status === "archived"
-      ? `Remove ${ticketId} from Archive? Comments and screenshots go with it.${linked}`
+      ? `Delete ${ticketId}? It leaves the board. Comments and screenshots go with it.${linked}`
       : `Delete ${ticketId}? Comments and screenshots go with it.${linked}`;
     if (!window.confirm(question)) return;
     setBusy(true);
@@ -411,7 +415,7 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
           </label>
           <label>
             State
-            {task.status === "archived" ? (
+            {task.status === "archived" && !canRemoveArchive ? (
               <span className="meta-value">Archive</span>
             ) : (
               <select
@@ -419,6 +423,7 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
                 disabled={busy}
                 onChange={(event) => chooseStatus(event.target.value as MovableStatus)}
               >
+                {task.status === "archived" ? <option value="archived">Archive</option> : null}
                 {stateOptions.map((status) => (
                   <option key={status} value={status}>
                     {STATUS_LABELS[status]}
@@ -552,6 +557,9 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
             </button>
           </div>
         </div>
+        {canRemoveArchive ? (
+          <p className="muted">Choose a state to put this ticket back on the board. Remove from Archive deletes it.</p>
+        ) : null}
         {task.status === "archived" ? (
           canRemoveArchive ? (
             <button className="danger-text" type="button" onClick={remove} disabled={busy}>

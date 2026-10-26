@@ -32,5 +32,5 @@ export const TAB_NOTES: Record<TaskStatus, string> = {
   resolved: "Marked resolved. A comment or a status change starts the 7 days over.",
   escalated: "Hand it to a teammate. They see a mark on it until they open it.",
   closed: "Closed for now. If nobody comments or changes the status for 7 days, it moves to Archive.",
-  archived: "Quiet for 7 days. They stay until you delete them. After 3 days here, a mark shows until someone opens the ticket.",
+  archived: "Quiet for 7 days. Barend can move one back to another state, or remove it from the board. After 3 days here, a mark shows until someone opens the ticket.",
 };

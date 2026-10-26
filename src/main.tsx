@@ -6,6 +6,12 @@ import "./styles.css";
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element missing");
 
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js");
+  });
+}
+
 createRoot(root).render(
   <StrictMode>
     <App />

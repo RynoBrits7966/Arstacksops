@@ -3,6 +3,14 @@ import { cleanPlatforms, formatTicketId, nextTicketNumber } from "../issues/keys
 import { isColorTaken } from "../projects";
 import { STATUS_LABELS } from "../statuses";
 import { latestWorkAt, archiveNeedsVisit, shouldArchive, statusAfterMove } from "./archive";
+import {
+  OfflineError,
+  clearOfflineCopy,
+  isNetworkFailure,
+  planBoardOpen,
+  readOfflineCopy,
+  writeOfflineCopy,
+} from "./offlineCopy";
 import { readIndexedDb } from "./readIndexedDb";
 import {
   SNAPSHOT_VERSION,
@@ -106,10 +114,81 @@ export interface WorkItemPatch {
 }
 
 let cache: Snapshot | null = null;
+let synced: Snapshot | null = null;
+let dirty = false;
+let syncing = false;
 let loading: Promise<void> | null = null;
 let recoveryError: Error | null = null;
 let remoteVersion = 0;
 let saveChain: Promise<void> = Promise.resolve();
+let watchingNetwork = false;
+
+export type SyncStatus = "saved" | "syncing" | "pending" | "offline" | "offline-pending";
+
+const syncListeners = new Set<(status: SyncStatus) => void>();
+let publishedStatus: SyncStatus | null = null;
+let authLost: (() => void) | null = null;
+
+export function onWorkspaceAuthLost(handler: () => void) {
+  authLost = handler;
+}
+
+export function hasUnsyncedChanges() {
+  return dirty;
+}
+
+export function syncStatus(): SyncStatus {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  if (offline) return dirty ? "offline-pending" : "offline";
+  if (syncing) return "syncing";
+  if (dirty) return "pending";
+  return "saved";
+}
+
+function publishSync() {
+  const status = syncStatus();
+  if (status === publishedStatus) return;
+  publishedStatus = status;
+  for (const listener of syncListeners) listener(status);
+}
+
+export function subscribeSyncStatus(listener: (status: SyncStatus) => void) {
+  syncListeners.add(listener);
+  listener(syncStatus());
+  watchNetwork();
+  return () => {
+    syncListeners.delete(listener);
+  };
+}
+
+function watchNetwork() {
+  if (watchingNetwork || typeof window === "undefined") return;
+  watchingNetwork = true;
+  window.addEventListener("online", () => {
+    publishSync();
+    void syncNow().catch(() => undefined);
+  });
+  window.addEventListener("offline", () => {
+    publishSync();
+  });
+}
+
+export function syncNow(): Promise<void> {
+  if (!usesSharedWorkspace()) return Promise.resolve();
+  const run = saveChain.then(() => flushShared());
+  saveChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+export async function discardOfflineBoard() {
+  dirty = false;
+  synced = null;
+  await clearOfflineCopy();
+  publishSync();
+}
 
 export class AuthRequiredError extends Error {
   constructor() {
@@ -121,9 +200,13 @@ export class AuthRequiredError extends Error {
 /** Drop the in-memory board so the next sign-in loads the shared workspace again. */
 export function closeWorkspace() {
   cache = null;
+  synced = null;
+  dirty = false;
+  syncing = false;
   loading = null;
   remoteVersion = 0;
   recoveryError = null;
+  publishSync();
 }
 
 function usesSharedWorkspace(): boolean {
@@ -133,6 +216,16 @@ function usesSharedWorkspace(): boolean {
 function keepFlatBackup(raw: string) {
   if (localStorage.getItem(FLAT_BACKUP_KEY)) return;
   localStorage.setItem(FLAT_BACKUP_KEY, raw);
+}
+
+async function remember(): Promise<boolean> {
+  if (!cache || !synced) return false;
+  try {
+    await writeOfflineCopy({ version: remoteVersion, synced, draft: cache, dirty });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function persist(base?: Snapshot) {
@@ -145,45 +238,93 @@ async function persist(base?: Snapshot) {
     }
     return;
   }
-  const origin = base ?? cache;
+  if (!synced) synced = structuredClone(base ?? cache);
+  dirty = true;
+  const stored = await remember();
+  const origin = synced;
+  syncing = true;
+  publishSync();
   const run = saveChain.then(() => saveSharedWorkspace(origin));
   saveChain = run.then(
     () => undefined,
     () => undefined,
   );
-  await run;
+  try {
+    await run;
+  } catch (error) {
+    if (error instanceof OfflineError) {
+      if (!stored) throw new Error("Could not store this change on this device. The change was not kept.");
+      return;
+    }
+    throw error;
+  } finally {
+    syncing = false;
+    publishSync();
+  }
 }
 
 async function projectAction(path: string, extra: Record<string, unknown> = {}) {
   await ensure();
-  const response = await fetch(path, {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ version: remoteVersion, ...extra }),
-  });
+  try {
+    await syncNow();
+  } catch (error) {
+    if (error instanceof OfflineError) {
+      throw new Error("This needs a connection. Nothing was changed. Other edits stay on this device until you are back online.");
+    }
+    throw error;
+  }
+  if (dirty) {
+    throw new Error("This needs a connection. Nothing was changed. Other edits stay on this device until you are back online.");
+  }
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: remoteVersion, ...extra }),
+    });
+  } catch (error) {
+    if (isNetworkFailure(error)) {
+      throw new Error("This needs a connection. Nothing was changed. Other edits stay on this device until you are back online.");
+    }
+    throw error;
+  }
   const body = (await response.json().catch(() => null)) as { message?: string; version?: number; snapshot?: unknown } | null;
   if (response.status === 401) throw new AuthRequiredError();
   if (!response.ok) throw new Error(body?.message ?? "Could not update the project.");
   const built = buildSnapshot(body?.snapshot);
   if (!built.ok) throw new Error(built.message);
   cache = built.snapshot;
+  synced = structuredClone(built.snapshot);
   remoteVersion = typeof body?.version === "number" ? body.version : remoteVersion;
+  dirty = false;
+  await remember();
+  publishSync();
 }
 
 async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
   if (!cache) return;
-  const response = await fetch("/api/workspace", {
-    method: "PUT",
-    credentials: "include",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ version: remoteVersion, snapshot: cache }),
-  });
+  let response: Response;
+  try {
+    response = await fetch("/api/workspace", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: remoteVersion, snapshot: cache }),
+    });
+  } catch (error) {
+    if (isNetworkFailure(error)) throw new OfflineError();
+    throw error;
+  }
   if (response.status === 401) throw new AuthRequiredError();
   if (response.status === 409 && attempt === 0) {
     const latest = await fetchWorkspace();
     cache = rebaseSnapshot(base, cache, latest.snapshot);
+    synced = latest.snapshot;
     remoteVersion = latest.version;
+    dirty = true;
+    await remember();
     await saveSharedWorkspace(latest.snapshot, 1);
     return;
   }
@@ -191,7 +332,10 @@ async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
     const latest = await fetchWorkspace().catch(() => null);
     if (latest) {
       cache = latest.snapshot;
+      synced = structuredClone(latest.snapshot);
       remoteVersion = latest.version;
+      dirty = false;
+      await remember();
     }
     throw new Error("Someone else updated the board. Reload the page and try again.");
   }
@@ -201,6 +345,38 @@ async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
   }
   const saved = (await response.json()) as { version: number };
   remoteVersion = saved.version;
+  synced = structuredClone(cache);
+  dirty = false;
+  await remember();
+}
+
+async function flushShared() {
+  if (!cache) return;
+  syncing = true;
+  publishSync();
+  try {
+    if (!dirty) {
+      const latest = await fetchWorkspace();
+      if (dirty) return;
+      cache = latest.snapshot;
+      synced = structuredClone(latest.snapshot);
+      remoteVersion = latest.version;
+      await writeOfflineCopy({ version: remoteVersion, synced, draft: cache, dirty: false }).catch(() => undefined);
+      return;
+    }
+    await saveSharedWorkspace(synced ?? cache);
+  } catch (error) {
+    if (error instanceof OfflineError) return;
+    if (error instanceof AuthRequiredError) {
+      closeWorkspace();
+      authLost?.();
+      return;
+    }
+    throw error;
+  } finally {
+    syncing = false;
+    publishSync();
+  }
 }
 
 async function commit<T>(change: (draft: Snapshot) => T): Promise<T> {
@@ -213,6 +389,10 @@ async function commit<T>(change: (draft: Snapshot) => T): Promise<T> {
     return result;
   } catch (error) {
     if (remoteVersion === previousVersion) cache = previous;
+    if (usesSharedWorkspace() && synced && cache) {
+      dirty = JSON.stringify(cache) !== JSON.stringify(synced);
+      await remember();
+    }
     throw error;
   }
 }
@@ -281,7 +461,13 @@ async function backupFromIndexedDb(): Promise<Record<string, unknown> | null> {
 }
 
 async function fetchWorkspace(): Promise<{ version: number; snapshot: Snapshot }> {
-  const response = await fetch("/api/workspace", { credentials: "include" });
+  let response: Response;
+  try {
+    response = await fetch("/api/workspace", { credentials: "include" });
+  } catch (error) {
+    if (isNetworkFailure(error)) throw new OfflineError();
+    throw error;
+  }
   if (response.status === 401) throw new AuthRequiredError();
   if (!response.ok) throw new Error("Could not load the shared board.");
   const body = (await response.json()) as { version: number; snapshot: unknown };
@@ -291,9 +477,59 @@ async function fetchWorkspace(): Promise<{ version: number; snapshot: Snapshot }
 }
 
 async function loadSharedWorkspace() {
-  const loaded = await fetchWorkspace();
-  cache = loaded.snapshot;
-  remoteVersion = loaded.version;
+  const local = await readOfflineCopy();
+  let remoteError: Error | null = null;
+  let remote:
+    | { ok: true; version: number; snapshot: Snapshot }
+    | { ok: false; auth: boolean; network: boolean };
+  try {
+    const loaded = await fetchWorkspace();
+    remote = { ok: true, version: loaded.version, snapshot: loaded.snapshot };
+  } catch (error) {
+    remoteError = error instanceof Error ? error : new Error("Could not load the shared board.");
+    remote = {
+      ok: false,
+      auth: error instanceof AuthRequiredError,
+      network: error instanceof OfflineError || isNetworkFailure(error),
+    };
+  }
+  const plan = planBoardOpen(remote, local);
+  if (plan.action === "sign-in") throw new AuthRequiredError();
+  if (plan.action === "wait-online") {
+    throw new Error("You're offline. Open the board once while connected, then it will keep working on this device.");
+  }
+  if (plan.action === "fail") throw remoteError ?? new Error("Could not load the shared board.");
+  if (plan.action === "use-local") {
+    cache = plan.copy.draft;
+    synced = plan.copy.synced;
+    remoteVersion = plan.copy.version;
+    dirty = plan.copy.dirty;
+    publishSync();
+    watchNetwork();
+    return;
+  }
+  if (plan.action === "use-remote") {
+    cache = plan.snapshot;
+    synced = structuredClone(plan.snapshot);
+    remoteVersion = plan.version;
+    dirty = false;
+    await remember();
+    publishSync();
+    watchNetwork();
+    return;
+  }
+  synced = plan.snapshot;
+  remoteVersion = plan.version;
+  cache = rebaseSnapshot(plan.local.synced, plan.local.draft, plan.snapshot);
+  dirty = true;
+  await remember();
+  try {
+    await saveSharedWorkspace(synced);
+  } catch (error) {
+    if (error instanceof AuthRequiredError) throw error;
+  }
+  publishSync();
+  watchNetwork();
 }
 
 async function load() {
@@ -832,12 +1068,12 @@ export const taskStore: TaskStore & {
       logActivity(task, actorId, direction === "up" ? "Moved up" : "Moved down", stamp);
     });
   },
-  acceptTask: async (id, userId) => {
+  acceptTask: async (id, userId, options) => {
     await ensure();
     return commit((draft) => {
       const task = requireTask(draft, id);
       if (task.status === "archived") throw new Error("Archived tasks stay in Archive until you delete them");
-      if (task.assigneeId !== userId) throw new Error("Only the tagged teammate can accept");
+      if (task.assigneeId !== userId && !options?.anyIssue) throw new Error("Only the tagged teammate can accept");
       if (task.acceptedAt) return cloneTask(task);
       const now = new Date().toISOString();
       task.status = "in_progress";

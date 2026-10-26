@@ -668,6 +668,15 @@ option {
   background: var(--danger-soft);
 }
 
+.sync-note {
+  margin: 0 16px 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(235, 133, 54, 0.14);
+  color: var(--ink);
+}
+
 .wi-table {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1221,6 +1230,30 @@ option {
 .accept-cancel {
   width: 100%;
   margin-top: 8px;
+}
+
+.ryno-accept {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  min-height: 280px;
+  padding: 36px 20px 48px;
+  text-align: center;
+}
+
+.ryno-accept .back-link {
+  justify-self: start;
+}
+
+.ryno-accept-button {
+  width: min(100%, 520px);
+  min-height: 140px;
+  margin-top: 12px;
+  padding: 28px 32px;
+  border-radius: 18px;
+  font-size: 3rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
 }
 
 @media (max-width: 980px) {

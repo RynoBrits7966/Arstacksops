@@ -38,6 +38,7 @@ interface BacklogViewProps {
   projects: Project[];
   users: User[];
   currentUserId: string;
+  sessionEmail: string;
   projectFilter: string | "all";
   selectedId: string | null;
   onSelect: (id: string | null) => void;
@@ -86,6 +87,7 @@ export function BacklogView({
   projects,
   users,
   currentUserId,
+  sessionEmail,
   projectFilter,
   selectedId,
   onSelect,
@@ -503,6 +505,7 @@ export function BacklogView({
             projects={orderedProjects}
             users={users}
             currentUserId={currentUserId}
+            sessionEmail={sessionEmail}
             onClose={() => onSelect(null)}
             onChanged={onChanged}
           />

@@ -59,7 +59,7 @@ export interface TaskStore {
     assigneeId: string;
   }): Promise<Task>;
   updateTask(id: string, patch: UpdateTaskInput): Promise<Task>;
-  acceptTask(id: string, userId: string): Promise<Task>;
+  acceptTask(id: string, userId: string, options?: { anyIssue?: boolean }): Promise<Task>;
   escalateTask(id: string, userId: string): Promise<Task>;
   markEscalationSeen(id: string, userId: string): Promise<boolean>;
   markArchiveVisited(id: string, now?: Date): Promise<boolean>;

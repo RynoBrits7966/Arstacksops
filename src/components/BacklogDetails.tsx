@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { PRIORITIES, PRIORITY_LABEL, TYPE_HINT, TYPE_LABEL, descendantIds, parentChoices } from "../backlog/model";
 import { formatWhen } from "../format";
+import { isBarend, isRyno } from "../people";
 import { archiveNeedsVisit } from "../storage/archive";
 import { taskStore } from "../storage/localStore";
 import { MOVE_TARGETS, STATUS_LABELS } from "../statuses";
@@ -17,6 +18,7 @@ interface BacklogDetailsProps {
   projects: Project[];
   users: User[];
   currentUserId: string;
+  sessionEmail: string;
   onClose: () => void;
   onChanged: () => Promise<void>;
 }
@@ -63,7 +65,7 @@ function draftFrom(task: Task): Draft {
   };
 }
 
-export function BacklogDetails({ task, tasks, projects, users, currentUserId, onClose, onChanged }: BacklogDetailsProps) {
+export function BacklogDetails({ task, tasks, projects, users, currentUserId, sessionEmail, onClose, onChanged }: BacklogDetailsProps) {
   const [draft, setDraft] = useState(() => draftFrom(task));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -186,7 +188,7 @@ export function BacklogDetails({ task, tasks, projects, users, currentUserId, on
     setBusy(true);
     setError(null);
     try {
-      await taskStore.acceptTask(task.id, currentUserId);
+      await taskStore.acceptTask(task.id, currentUserId, { anyIssue: isRyno(sessionEmail) });
       await onChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not accept");
@@ -208,9 +210,28 @@ export function BacklogDetails({ task, tasks, projects, users, currentUserId, on
     }
   }
 
+  const rynoMustAccept = isRyno(sessionEmail) && task.status !== "archived" && !task.acceptedAt;
+  const canRemoveArchive = task.status === "archived" && isBarend(sessionEmail);
   const stateOptions = MOVE_TARGETS.filter(
     (status) => status === task.status || !needsAccept || task.acceptedAt !== null || status !== "in_progress",
   );
+
+  if (rynoMustAccept) {
+    return (
+      <aside className="details-panel" aria-label="Accept issue">
+        <div className="ryno-accept">
+          <button className="back-link" type="button" onClick={onClose}>
+            Close
+          </button>
+          <p className="muted">Accept this issue before reading or changing it.</p>
+          {error ? <p className="form-error">{error}</p> : null}
+          <button className="primary ryno-accept-button" type="button" onClick={() => void accept()} disabled={busy}>
+            {busy ? "Accepting…" : "Accept"}
+          </button>
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside className="details-panel" aria-label="Work item details">
@@ -481,17 +502,20 @@ export function BacklogDetails({ task, tasks, projects, users, currentUserId, on
             placeholder="https://github.com/…"
           />
         </label>
+        {task.status !== "archived" || canRemoveArchive ? (
         <div className="danger-zone">
           {confirmingDelete ? (
             <>
               <p>
-                {nested.length > 0
-                  ? `Delete “${task.title}” and ${nested.length} item${nested.length === 1 ? "" : "s"} nested under it? Their comments and screenshots are deleted too.`
-                  : `Delete “${task.title}”? Its comments and screenshots are deleted too.`}
+                {task.status === "archived"
+                  ? `Remove “${task.title}” from Archive? Comments and screenshots go with it.`
+                  : nested.length > 0
+                    ? `Delete “${task.title}” and ${nested.length} item${nested.length === 1 ? "" : "s"} nested under it? Their comments and screenshots are deleted too.`
+                    : `Delete “${task.title}”? Its comments and screenshots are deleted too.`}
               </p>
               <div className="form-actions">
                 <button className="danger" type="button" onClick={remove} disabled={busy}>
-                  Delete
+                  {task.status === "archived" ? "Remove from Archive" : "Delete"}
                 </button>
                 <button className="quiet" type="button" onClick={() => setConfirmingDelete(false)} disabled={busy}>
                   Cancel
@@ -500,10 +524,11 @@ export function BacklogDetails({ task, tasks, projects, users, currentUserId, on
             </>
           ) : (
             <button className="danger" type="button" onClick={() => setConfirmingDelete(true)}>
-              Delete
+              {task.status === "archived" ? "Remove from Archive" : "Delete"}
             </button>
           )}
         </div>
+        ) : null}
       </form>
       {needsAccept ? <Screenshots taskId={task.id} /> : null}
       <Comments taskId={task.id} users={users} currentUserId={currentUserId} onChanged={onChanged} />

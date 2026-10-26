@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { authClient, currentSession, type SignedInUser } from "./auth/client";
+import { authClient, currentSession, forgetSession, type SignedInUser } from "./auth/client";
 import { AuthScreen } from "./components/AuthScreen";
 import { BacklogView } from "./components/BacklogView";
 import { IssueBoard } from "./components/IssueBoard";
@@ -7,7 +7,17 @@ import { ProjectSidebar } from "./components/ProjectSidebar";
 import { StatsPage } from "./components/StatsPage";
 import { unreadMentionIds } from "./mentions";
 import { compareDeadlinePriority, isSignedOff } from "./projects";
-import { AuthRequiredError, closeWorkspace, taskStore } from "./storage/localStore";
+import {
+  AuthRequiredError,
+  closeWorkspace,
+  discardOfflineBoard,
+  hasUnsyncedChanges,
+  onWorkspaceAuthLost,
+  subscribeSyncStatus,
+  syncNow,
+  taskStore,
+  type SyncStatus,
+} from "./storage/localStore";
 import type { Comment, Project, Task, TaskStatus, User } from "./types";
 
 const VIEW_KEY = "arstacksops.view";
@@ -40,6 +50,8 @@ export function App() {
   const [menuCollapsed, setMenuCollapsed] = useState(storedMenuCollapsed);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [sync, setSync] = useState<SyncStatus>("saved");
 
   const refresh = useCallback(async () => {
     await taskStore.seedDemo();
@@ -71,6 +83,41 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    onWorkspaceAuthLost(() => {
+      forgetSession();
+      setReady(false);
+      setTasks([]);
+      setProjects([]);
+      setUsers([]);
+      setComments([]);
+      setSelectedId(null);
+      setBacklogSelectedId(null);
+      setSession(null);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    let first = true;
+    return subscribeSyncStatus((status) => {
+      setSync(status);
+      if (status === "saved") setSyncNotice(null);
+      if (first) {
+        first = false;
+        return;
+      }
+      if (status !== "saved") return;
+      void refresh().catch((caught: unknown) => {
+        if (caught instanceof AuthRequiredError) {
+          closeWorkspace();
+          forgetSession();
+          setSession(null);
+        }
+      });
+    });
+  }, [refresh, session]);
+
+  useEffect(() => {
     if (!session) return;
     let cancelled = false;
     refresh()
@@ -99,11 +146,13 @@ export function App() {
       if (running) return;
       running = true;
       try {
+        await syncNow();
         await refresh();
         lastRefresh = Date.now();
       } catch (caught: unknown) {
         if (caught instanceof AuthRequiredError) {
           closeWorkspace();
+          forgetSession();
           setSession(null);
         }
       } finally {
@@ -115,8 +164,7 @@ export function App() {
     }, BOARD_REFRESH_MS);
     function onVisible() {
       if (document.visibilityState !== "visible") return;
-      if (Date.now() - lastRefresh < BOARD_REFRESH_MS) return;
-      void pull();
+      if (hasUnsyncedChanges() || Date.now() - lastRefresh >= BOARD_REFRESH_MS) void pull();
     }
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -140,7 +188,31 @@ export function App() {
   );
 
   async function signOut() {
-    await authClient.signOut();
+    if (!navigator.onLine && hasUnsyncedChanges()) {
+      setSyncNotice("You're offline. Stay signed in so the changes on this device can sync.");
+      return;
+    }
+    try {
+      await syncNow();
+    } catch (caught) {
+      if (hasUnsyncedChanges()) {
+        setSyncNotice(caught instanceof Error ? caught.message : "Could not sync before signing out.");
+        return;
+      }
+    }
+    if (hasUnsyncedChanges()) {
+      setSyncNotice("Changes are still on this device. Stay signed in until they sync.");
+      return;
+    }
+    try {
+      const result = await authClient.signOut();
+      if (result.error) throw new Error(result.error.message || "Could not sign out");
+    } catch {
+      setSyncNotice("You're offline, so this device stays signed in.");
+      return;
+    }
+    forgetSession();
+    await discardOfflineBoard();
     closeWorkspace();
     setReady(false);
     setTasks([]);
@@ -238,6 +310,12 @@ export function App() {
           </div>
           </div>
         </div>
+        {syncNotice ? <p className="sync-note">{syncNotice}</p> : null}
+        {sync === "offline-pending" ? (
+          <p className="sync-note">Offline. Changes are saved on this device and will sync when you reconnect.</p>
+        ) : null}
+        {sync === "offline" ? <p className="sync-note">Offline. Showing the last board saved on this device.</p> : null}
+        {sync === "syncing" || sync === "pending" ? <p className="sync-note">Syncing changes…</p> : null}
         {error ? <p className="form-error banner">{error}</p> : null}
         {!ready ? <p className="empty">Loading issues…</p> : null}
         {ready && !error && view === "work" ? (
@@ -247,6 +325,7 @@ export function App() {
             users={users}
             comments={comments}
             currentUserId={session.id}
+            sessionEmail={session.email}
             projectFilter={projectFilter}
             tab={tab}
             selectedId={selectedId}
@@ -262,6 +341,7 @@ export function App() {
             projects={boardProjects}
             users={users}
             currentUserId={session.id}
+            sessionEmail={session.email}
             projectFilter={projectFilter}
             selectedId={backlogSelectedId}
             onSelect={setBacklogSelectedId}

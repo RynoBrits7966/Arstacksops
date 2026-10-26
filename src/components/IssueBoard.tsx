@@ -85,6 +85,7 @@ interface IssueBoardProps {
   users: User[];
   comments: Comment[];
   currentUserId: string;
+  sessionEmail: string;
   projectFilter: string | "all";
   tab: TaskStatus;
   selectedId: string | null;
@@ -100,6 +101,7 @@ export function IssueBoard({
   users,
   comments,
   currentUserId,
+  sessionEmail,
   projectFilter,
   tab,
   selectedId,
@@ -345,6 +347,7 @@ export function IssueBoard({
                           projects={projects}
                           users={users}
                           currentUserId={currentUserId}
+                          sessionEmail={sessionEmail}
                           comments={comments}
                           linkedCount={descendantIds(tasks, selected.id).length}
                           onClose={() => {

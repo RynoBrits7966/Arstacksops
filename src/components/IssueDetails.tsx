@@ -11,6 +11,7 @@ import {
   formatTicketId,
 } from "../issues/keys";
 import { formatDeadline, isDeadlinePriority } from "../projects";
+import { isBarend, isRyno } from "../people";
 import { archiveNeedsVisit, formatIdleLeft, latestWorkAt } from "../storage/archive";
 import { taskStore } from "../storage/localStore";
 import { MOVE_TARGETS, STATUS_LABELS } from "../statuses";
@@ -39,6 +40,7 @@ interface IssueDetailsProps {
   projects: Project[];
   users: User[];
   currentUserId: string;
+  sessionEmail: string;
   comments: Comment[];
   linkedCount: number;
   onClose: () => void;
@@ -51,6 +53,7 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
   projects,
   users,
   currentUserId,
+  sessionEmail,
   comments,
   linkedCount,
   onClose,
@@ -107,9 +110,10 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
   }, [task]);
 
   useEffect(() => {
+    if (isRyno(sessionEmail) && !task.acceptedAt && task.status !== "archived") return;
     if (task.escalatedToId !== currentUserId || task.escalationSeenAt) return;
     taskStore.markEscalationSeen(task.id, currentUserId).then(() => onRefresh()).catch(() => undefined);
-  }, [task.id, task.escalatedToId, task.escalationSeenAt, currentUserId, onRefresh]);
+  }, [task.id, task.acceptedAt, task.status, task.escalatedToId, task.escalationSeenAt, currentUserId, sessionEmail, onRefresh]);
 
   useEffect(() => {
     if (!archiveNeedsVisit(task)) return;
@@ -148,6 +152,8 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
     JSON.stringify(checklist) !== JSON.stringify(task.checklist);
   dirtyRef.current = dirty;
   const canAccept = task.status !== "archived" && !task.acceptedAt && currentUserId === task.assigneeId;
+  const rynoMustAccept = isRyno(sessionEmail) && task.status !== "archived" && !task.acceptedAt;
+  const canRemoveArchive = task.status === "archived" && isBarend(sessionEmail);
   const stateOptions = MOVE_TARGETS.filter(
     (status) => status === task.status || task.acceptedAt !== null || status !== "in_progress",
   );
@@ -284,7 +290,7 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
     setBusy(true);
     setError(null);
     try {
-      await taskStore.acceptTask(task.id, currentUserId);
+      await taskStore.acceptTask(task.id, currentUserId, { anyIssue: isRyno(sessionEmail) });
       setAcceptOpen(false);
       await onMoved("in_progress");
     } catch (caught) {
@@ -298,7 +304,10 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
       linkedCount > 0
         ? ` ${linkedCount} older linked record${linkedCount === 1 ? "" : "s"} stored under it will be removed as well.`
         : "";
-    if (!window.confirm(`Delete ${ticketId}? Comments and screenshots go with it.${linked}`)) return;
+    const question = task.status === "archived"
+      ? `Remove ${ticketId} from Archive? Comments and screenshots go with it.${linked}`
+      : `Delete ${ticketId}? Comments and screenshots go with it.${linked}`;
+    if (!window.confirm(question)) return;
     setBusy(true);
     try {
       await taskStore.deleteTask(task.id);
@@ -315,6 +324,24 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
     if (!label) return;
     setChecklist((items) => [...items, { id: crypto.randomUUID(), label, done: false }]);
     setCheckDraft("");
+  }
+
+  if (rynoMustAccept) {
+    return (
+      <aside className="issue-details" aria-label="Accept issue">
+        <div className="ryno-accept">
+          <button className="back-link" type="button" onClick={onClose}>
+            Close
+          </button>
+          <p className="ticket-id ticket-id-large">{ticketId}</p>
+          <p className="muted">Accept this issue before reading or changing it.</p>
+          {error ? <p className="form-error">{error}</p> : null}
+          <button className="primary ryno-accept-button" type="button" onClick={() => void confirmAccept()} disabled={busy}>
+            {busy ? "Accepting…" : "Accept"}
+          </button>
+        </div>
+      </aside>
+    );
   }
 
   return (
@@ -525,9 +552,17 @@ export const IssueDetails = forwardRef<IssueLeaveHandle, IssueDetailsProps>(func
             </button>
           </div>
         </div>
-        <button className="danger-text" type="button" onClick={remove} disabled={busy}>
-          Delete issue
-        </button>
+        {task.status === "archived" ? (
+          canRemoveArchive ? (
+            <button className="danger-text" type="button" onClick={remove} disabled={busy}>
+              Remove from Archive
+            </button>
+          ) : null
+        ) : (
+          <button className="danger-text" type="button" onClick={remove} disabled={busy}>
+            Delete issue
+          </button>
+        )}
       </form>
       <Screenshots taskId={task.id} reloadKey={shotsVersion} />
       <Comments

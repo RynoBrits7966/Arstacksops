@@ -114,6 +114,177 @@ export function base64ToBlob(data: string, mime: string): Blob {
   return new Blob([bytes], { type: mime });
 }
 
+/** Copy the board without copying screenshot or voice bytes. Those strings stay shared. */
+export function cloneSnapshot(snapshot: Snapshot): Snapshot {
+  return {
+    version: snapshot.version,
+    nextSeq: snapshot.nextSeq,
+    users: snapshot.users.map((user) => ({ ...user })),
+    projects: snapshot.projects.map((project) => ({
+      ...project,
+      signOff: project.signOff ? { ...project.signOff } : null,
+    })),
+    tasks: snapshot.tasks.map((task) => structuredClone(task)),
+    comments: snapshot.comments.map((comment) => ({
+      ...comment,
+      mentionIds: [...comment.mentionIds],
+      readByIds: [...comment.readByIds],
+      voice: comment.voice ? { ...comment.voice } : null,
+    })),
+    attachments: snapshot.attachments.map((attachment) => ({ ...attachment })),
+  };
+}
+
+export function attachmentMediaKey(id: string): string {
+  return `a:${id}`;
+}
+
+export function voiceMediaKey(id: string): string {
+  return `v:${id}`;
+}
+
+/** Screenshot and voice bytes keyed for storage outside the board JSON. */
+export function collectMedia(snapshot: Snapshot): Map<string, string> {
+  const media = new Map<string, string>();
+  for (const attachment of snapshot.attachments) {
+    if (attachment.dataBase64) media.set(attachmentMediaKey(attachment.id), attachment.dataBase64);
+  }
+  for (const comment of snapshot.comments) {
+    if (comment.voice?.dataBase64) media.set(voiceMediaKey(comment.id), comment.voice.dataBase64);
+  }
+  return media;
+}
+
+export function embedsMedia(snapshot: Snapshot): boolean {
+  return (
+    snapshot.attachments.some((attachment) => attachment.dataBase64.length > 0) ||
+    snapshot.comments.some((comment) => (comment.voice?.dataBase64.length ?? 0) > 0)
+  );
+}
+
+/** Board JSON with file bytes removed. The bytes live beside the snapshot. */
+export function snapshotWithoutMedia(snapshot: Snapshot): Snapshot {
+  return {
+    ...snapshot,
+    attachments: snapshot.attachments.map((attachment) =>
+      attachment.dataBase64 ? { ...attachment, dataBase64: "" } : attachment,
+    ),
+    comments: snapshot.comments.map((comment) =>
+      comment.voice?.dataBase64 ? { ...comment, voice: { ...comment.voice, dataBase64: "" } } : comment,
+    ),
+  };
+}
+
+export function hydrateSnapshot(snapshot: Snapshot, media: Map<string, string>): Snapshot {
+  return {
+    ...snapshot,
+    attachments: snapshot.attachments.map((attachment) => {
+      const stored = media.get(attachmentMediaKey(attachment.id));
+      if (!stored || attachment.dataBase64 === stored) return attachment;
+      return { ...attachment, dataBase64: stored };
+    }),
+    comments: snapshot.comments.map((comment) => {
+      if (!comment.voice) return comment;
+      const stored = media.get(voiceMediaKey(comment.id));
+      if (!stored || comment.voice.dataBase64 === stored) return comment;
+      return { ...comment, voice: { ...comment.voice, dataBase64: stored } };
+    }),
+  };
+}
+
+export function planMediaSync(
+  stored: Map<string, string>,
+  next: Map<string, string>,
+): { upsert: Array<[string, string]>; remove: string[] } {
+  const upsert: Array<[string, string]> = [];
+  for (const [id, data] of next) {
+    if (stored.get(id) !== data) upsert.push([id, data]);
+  }
+  const remove: string[] = [];
+  for (const id of stored.keys()) {
+    if (!next.has(id)) remove.push(id);
+  }
+  return { upsert, remove };
+}
+
+/**
+ * Body for PUT /api/workspace.
+ * Screenshots and voice notes already stored are marked unchanged and their bytes are left out.
+ */
+export function snapshotForUpload(draft: Snapshot, synced: Snapshot | null): unknown {
+  if (!synced) return draft;
+  const knownFiles = new Map(synced.attachments.map((attachment) => [attachment.id, attachment.dataBase64]));
+  const knownVoices = new Map(
+    synced.comments.flatMap((comment) => (comment.voice ? [[comment.id, comment.voice.dataBase64] as const] : [])),
+  );
+  return {
+    ...draft,
+    attachments: draft.attachments.map((attachment) => {
+      if (knownFiles.get(attachment.id) !== attachment.dataBase64) return attachment;
+      return {
+        id: attachment.id,
+        taskId: attachment.taskId,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        createdAt: attachment.createdAt,
+        unchanged: true,
+      };
+    }),
+    comments: draft.comments.map((comment) => {
+      if (!comment.voice || knownVoices.get(comment.id) !== comment.voice.dataBase64) return comment;
+      return {
+        ...comment,
+        voice: {
+          mimeType: comment.voice.mimeType,
+          durationMs: comment.voice.durationMs,
+          unchanged: true,
+        },
+      };
+    }),
+  };
+}
+
+/** Put server-side bytes back onto attachments and voice notes the client did not resend. */
+export function rehydrateUpload(previous: Snapshot, raw: unknown): unknown {
+  const record = asRecord(raw);
+  if (!record) return raw;
+  const attachments = Array.isArray(record.attachments)
+    ? record.attachments.map((item) => rehydrateAttachment(previous, item))
+    : record.attachments;
+  const comments = Array.isArray(record.comments)
+    ? record.comments.map((item) => rehydrateComment(previous, item))
+    : record.comments;
+  return { ...record, attachments, comments };
+}
+
+function dropFlag(record: Record<string, unknown>, dataBase64: string): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...record, dataBase64 };
+  delete next.unchanged;
+  return next;
+}
+
+function rehydrateAttachment(previous: Snapshot, item: unknown): unknown {
+  const record = asRecord(item);
+  if (!record || record.unchanged !== true) return item;
+  if (typeof record.dataBase64 === "string" && record.dataBase64.length > 0) return dropFlag(record, record.dataBase64);
+  const id = typeof record.id === "string" ? record.id : "";
+  const prior = previous.attachments.find((attachment) => attachment.id === id)?.dataBase64;
+  if (!prior) throw new Error("A screenshot is missing its file data. Reload the page and try again.");
+  return dropFlag(record, prior);
+}
+
+function rehydrateComment(previous: Snapshot, item: unknown): unknown {
+  const record = asRecord(item);
+  if (!record) return item;
+  const voice = asRecord(record.voice);
+  if (!voice || voice.unchanged !== true) return item;
+  const id = typeof record.id === "string" ? record.id : "";
+  const inline = typeof voice.dataBase64 === "string" && voice.dataBase64.length > 0 ? voice.dataBase64 : "";
+  const prior = inline || previous.comments.find((comment) => comment.id === id)?.voice?.dataBase64 || "";
+  if (!prior) throw new Error("A voice note is missing its audio. Reload the page and try again.");
+  return { ...record, voice: dropFlag(voice, prior) };
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;

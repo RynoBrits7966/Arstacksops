@@ -18,7 +18,9 @@ import {
 } from "../backlog/model";
 import { formatWhen } from "../format";
 import { ISSUE_TYPE_LABEL, ISSUE_TYPES, isIssueType } from "../issues/keys";
+import { XLSX_MIME, downloadBytes } from "../export/download";
 import { buildReportPdf } from "../export/reportPdf";
+import { buildScopedWorkbook } from "../export/workbookFile";
 import { sortProjects } from "../projects";
 import { archiveNeedsVisit } from "../storage/archive";
 import { taskStore } from "../storage/localStore";
@@ -104,6 +106,7 @@ export function BacklogView({
   const [creating, setCreating] = useState(false);
   const [presetParentId, setPresetParentId] = useState<string | null>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const active = isQueryActive(query);
   const { rows } = useMemo(
@@ -183,16 +186,27 @@ export function BacklogView({
     setBackupError(null);
     try {
       const pdf = buildReportPdf({ projects, tasks, users });
-      const body = new ArrayBuffer(pdf.byteLength);
-      new Uint8Array(body).set(pdf);
-      const url = URL.createObjectURL(new Blob([body], { type: "application/pdf" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "arstacksops.pdf";
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadBytes(pdf, "arstacksops.pdf", "application/pdf");
     } catch (caught) {
       setBackupError(caught instanceof Error ? caught.message : "Could not export");
+    }
+  }
+
+  async function exportExcel() {
+    setBackupError(null);
+    setExporting(true);
+    try {
+      const file = await buildScopedWorkbook({
+        projects,
+        tasks,
+        users,
+        allProjects: projectFilter === "all",
+      });
+      downloadBytes(file.bytes, file.filename, XLSX_MIME);
+    } catch (caught) {
+      setBackupError(caught instanceof Error ? caught.message : "Could not export");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -245,6 +259,9 @@ export function BacklogView({
         </button>
         <button className="quiet" type="button" onClick={exportData}>
           Export PDF
+        </button>
+        <button className="quiet" type="button" onClick={() => void exportExcel()} disabled={exporting}>
+          {exporting ? "Exporting…" : projectFilter === "all" ? "Export all to Excel" : "Export Excel"}
         </button>
       </div>
       {filtersOpen ? (

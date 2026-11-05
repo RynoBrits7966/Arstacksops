@@ -70,11 +70,15 @@ export async function readOfflineCopy(): Promise<OfflineCopy | null> {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error ?? new Error("Could not read the saved board"));
       });
-      const record = raw && typeof raw === "object" ? (raw as Partial<OfflineCopy>) : null;
+      const record = raw && typeof raw === "object" ? (raw as Partial<OfflineCopy> & { draft?: OfflineCopy["draft"] | null }) : null;
       if (!record || typeof record.version !== "number") return null;
       const synced = buildSnapshot(record.synced);
+      if (!synced.ok) return null;
+      if (!record.draft) {
+        return { version: record.version, synced: synced.snapshot, draft: synced.snapshot, dirty: false };
+      }
       const draft = buildSnapshot(record.draft);
-      if (!synced.ok || !draft.ok) return null;
+      if (!draft.ok) return null;
       return { version: record.version, synced: synced.snapshot, draft: draft.snapshot, dirty: Boolean(record.dirty) };
     } finally {
       db.close();
@@ -86,10 +90,11 @@ export async function readOfflineCopy(): Promise<OfflineCopy | null> {
 
 export async function writeOfflineCopy(copy: OfflineCopy): Promise<void> {
   if (typeof indexedDB === "undefined") return;
+  const stored = copy.dirty ? copy : { version: copy.version, synced: copy.synced, draft: null, dirty: false };
   const db = await openDb();
   try {
     await new Promise<void>((resolve, reject) => {
-      const request = db.transaction(STORE, "readwrite").objectStore(STORE).put(copy, KEY);
+      const request = db.transaction(STORE, "readwrite").objectStore(STORE).put(stored, KEY);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error ?? new Error("Could not store the board on this device"));
     });

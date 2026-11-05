@@ -126,7 +126,7 @@ export async function createApp(options: AppOptions = {}) {
       if (saved === "conflict") {
         return c.json({ message: "Someone else updated the board. Reload the page and try again." }, 409);
       }
-      return c.json(saved);
+      return c.json({ version: saved.version });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not save the board.";
       return c.json({ message }, 400);

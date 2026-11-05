@@ -1,6 +1,16 @@
-import { buildSnapshot, emptySnapshot, type Snapshot } from "../src/storage/snapshot";
+import {
+  buildSnapshot,
+  collectMedia,
+  embedsMedia,
+  emptySnapshot,
+  hydrateSnapshot,
+  planMediaSync,
+  rehydrateUpload,
+  snapshotWithoutMedia,
+  type Snapshot,
+} from "../src/storage/snapshot";
 import type { ProjectSignOff, User } from "../src/types";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { MemoryDB } from "better-auth/adapters/memory";
 import { guardProjectWrite, removeProject, reopenProject, signOffProject, type SnapshotChange } from "./projects";
 
@@ -44,7 +54,7 @@ export function memoryWorkspace(db: MemoryDB): WorkspaceStore {
     },
     async write(expectedVersion, snapshot, members) {
       if (expectedVersion !== record.version) return "conflict";
-      const built = buildSnapshot(snapshot);
+      const built = buildSnapshot(rehydrateUpload(record.snapshot, snapshot));
       if (!built.ok) throw new Error(built.message);
       const guarded = guardProjectWrite(record.snapshot, built.snapshot);
       record = { version: record.version + 1, snapshot: withMembers(guarded, members) };
@@ -74,29 +84,18 @@ export function memoryWorkspace(db: MemoryDB): WorkspaceStore {
 export function postgresWorkspace(pool: Pool): WorkspaceStore {
   return {
     async read() {
-      await ensureWorkspaceTable(pool);
-      const row = await loadRow(pool);
+      const row = await loadBoard(pool);
       const members = await postgresMembers(pool);
       return { version: row.version, snapshot: withMembers(row.snapshot, members) };
     },
     async write(expectedVersion, snapshot, members) {
-      await ensureWorkspaceTable(pool);
-      const built = buildSnapshot(snapshot);
-      if (!built.ok) throw new Error(built.message);
-      const current = await loadRow(pool);
+      const current = await loadBoard(pool);
       if (current.version !== expectedVersion) return "conflict";
+      const built = buildSnapshot(rehydrateUpload(current.snapshot, snapshot));
+      if (!built.ok) throw new Error(built.message);
       const guarded = guardProjectWrite(current.snapshot, built.snapshot);
       const next = withMembers(guarded, members);
-      const updated = await pool.query(
-        `UPDATE workspace
-         SET version = version + 1, snapshot = $2::jsonb
-         WHERE id = 'company' AND version = $1
-         RETURNING version, snapshot`,
-        [expectedVersion, JSON.stringify(next)],
-      );
-      if (updated.rowCount === 0) return "conflict";
-      const row = updated.rows[0] as { version: number; snapshot: Snapshot };
-      return { version: row.version, snapshot: row.snapshot };
+      return persistBoard(pool, expectedVersion, next, current.storedMedia);
     },
     async members() {
       return postgresMembers(pool);
@@ -134,22 +133,14 @@ async function savePostgres(
   expectedVersion: number,
   change: (snapshot: Snapshot) => SnapshotChange,
 ): Promise<ProjectMutation> {
-  await ensureWorkspaceTable(pool);
-  const current = await loadRow(pool);
+  const current = await loadBoard(pool);
   if (current.version !== expectedVersion) return { ok: false, reason: "conflict" };
   const changed = change(current.snapshot);
   if (!changed.ok) return changed;
   const next = withMembers(changed.snapshot, await postgresMembers(pool));
-  const updated = await pool.query(
-    `UPDATE workspace
-     SET version = version + 1, snapshot = $2::jsonb
-     WHERE id = 'company' AND version = $1
-     RETURNING version, snapshot`,
-    [expectedVersion, JSON.stringify(next)],
-  );
-  if (updated.rowCount === 0) return { ok: false, reason: "conflict" };
-  const row = updated.rows[0] as { version: number; snapshot: Snapshot };
-  return { ok: true, record: { version: row.version, snapshot: row.snapshot } };
+  const saved = await persistBoard(pool, expectedVersion, next, current.storedMedia);
+  if (saved === "conflict") return { ok: false, reason: "conflict" };
+  return { ok: true, record: saved };
 }
 
 function withMembers(snapshot: Snapshot, members: User[]): Snapshot {
@@ -177,12 +168,31 @@ async function postgresMembers(pool: Pool): Promise<Member[]> {
   });
 }
 
+const workspaceReady = new WeakMap<Pool, Promise<void>>();
+
 async function ensureWorkspaceTable(pool: Pool): Promise<void> {
+  const pending = workspaceReady.get(pool);
+  if (pending) return pending;
+  const created = createWorkspaceTables(pool).catch((error: unknown) => {
+    workspaceReady.delete(pool);
+    throw error;
+  });
+  workspaceReady.set(pool, created);
+  return created;
+}
+
+async function createWorkspaceTables(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS workspace (
       id text PRIMARY KEY,
       version integer NOT NULL,
       snapshot jsonb NOT NULL
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS workspace_media (
+      id text PRIMARY KEY,
+      data_base64 text NOT NULL
     )
   `);
   await pool.query(
@@ -193,11 +203,106 @@ async function ensureWorkspaceTable(pool: Pool): Promise<void> {
   );
 }
 
-async function loadRow(pool: Pool): Promise<WorkspaceRecord> {
+interface LoadedBoard extends WorkspaceRecord {
+  storedMedia: Map<string, string>;
+}
+
+async function loadBoard(pool: Pool): Promise<LoadedBoard> {
+  await ensureWorkspaceTable(pool);
   const result = await pool.query(`SELECT version, snapshot FROM workspace WHERE id = 'company'`);
-  const row = result.rows[0] as { version: number; snapshot: Snapshot } | undefined;
-  if (!row) return { version: 1, snapshot: emptySnapshot() };
+  const row = result.rows[0] as { version: number; snapshot: unknown } | undefined;
+  if (!row) return { version: 1, snapshot: emptySnapshot(), storedMedia: new Map() };
   const built = buildSnapshot(row.snapshot);
   if (!built.ok) throw new Error(built.message);
-  return { version: row.version, snapshot: built.snapshot };
+  const storedMedia = await readMedia(pool);
+  const hydrated = hydrateSnapshot(built.snapshot, storedMedia);
+  if (!embedsMedia(built.snapshot)) {
+    return { version: row.version, snapshot: hydrated, storedMedia };
+  }
+  const moved = collectMedia(hydrated);
+  const client = await pool.connect();
+  let stored = false;
+  try {
+    await client.query("BEGIN");
+    await writeMediaPlan(client, planMediaSync(storedMedia, moved));
+    const updated = await client.query(`UPDATE workspace SET snapshot = $2::jsonb WHERE id = 'company' AND version = $1`, [
+      row.version,
+      JSON.stringify(snapshotWithoutMedia(hydrated)),
+    ]);
+    if ((updated.rowCount ?? 0) === 0) {
+      await client.query("ROLLBACK");
+    } else {
+      await client.query("COMMIT");
+      stored = true;
+    }
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { version: row.version, snapshot: hydrated, storedMedia: stored ? moved : storedMedia };
+}
+
+async function readMedia(pool: Pool): Promise<Map<string, string>> {
+  const result = await pool.query(`SELECT id, data_base64 FROM workspace_media`);
+  const media = new Map<string, string>();
+  for (const row of result.rows as { id: string; data_base64: string }[]) {
+    media.set(row.id, row.data_base64);
+  }
+  return media;
+}
+
+async function writeMediaPlan(
+  db: Pool | PoolClient,
+  plan: { upsert: Array<[string, string]>; remove: string[] },
+): Promise<void> {
+  for (const [id, data] of plan.upsert) {
+    await db.query(
+      `INSERT INTO workspace_media (id, data_base64) VALUES ($1, $2)
+       ON CONFLICT (id) DO UPDATE SET data_base64 = EXCLUDED.data_base64`,
+      [id, data],
+    );
+  }
+  if (plan.remove.length > 0) {
+    await db.query(`DELETE FROM workspace_media WHERE id = ANY($1::text[])`, [plan.remove]);
+  }
+}
+
+async function persistBoard(
+  pool: Pool,
+  expectedVersion: number,
+  next: Snapshot,
+  storedMedia: Map<string, string>,
+): Promise<WorkspaceRecord | "conflict"> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query(`SELECT version FROM workspace WHERE id = 'company' FOR UPDATE`);
+    const version = (locked.rows[0] as { version: number } | undefined)?.version;
+    if (version !== expectedVersion) {
+      await client.query("ROLLBACK");
+      return "conflict";
+    }
+    await writeMediaPlan(client, planMediaSync(storedMedia, collectMedia(next)));
+    const updated = await client.query(
+      `UPDATE workspace
+       SET version = version + 1, snapshot = $2::jsonb
+       WHERE id = 'company' AND version = $1
+       RETURNING version`,
+      [expectedVersion, JSON.stringify(snapshotWithoutMedia(next))],
+    );
+    if (updated.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return "conflict";
+    }
+    await client.query("COMMIT");
+    const row = updated.rows[0] as { version: number };
+    return { version: row.version, snapshot: next };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }

@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildSnapshot, emptySnapshot, hierarchyIssues, inspectImport, rebaseSnapshot } from "./snapshot";
+import {
+  buildSnapshot,
+  collectMedia,
+  emptySnapshot,
+  hierarchyIssues,
+  hydrateSnapshot,
+  inspectImport,
+  planMediaSync,
+  rebaseSnapshot,
+  rehydrateUpload,
+  snapshotForUpload,
+  snapshotWithoutMedia,
+} from "./snapshot";
 
 describe("snapshot migration", () => {
   it("keeps existing ids and defaults a missing type to task at project level", () => {
@@ -146,6 +158,112 @@ describe("rebaseSnapshot", () => {
     expect(merged.projects.map((project) => project.id)).toEqual(["p1", "p2"]);
     expect(merged.tasks.map((task) => task.id)).toEqual(["task-1"]);
     expect(merged.nextSeq).toBe(4);
+  });
+});
+
+describe("snapshot upload", () => {
+  it("leaves unchanged screenshot and voice bytes out of the save payload", () => {
+    const shot = "A".repeat(2_000_000);
+    const voice = "B".repeat(50_000);
+    const synced = emptySnapshot();
+    synced.attachments.push({
+      id: "file-1",
+      taskId: "task-1",
+      fileName: "shot.png",
+      mimeType: "image/png",
+      createdAt: "2026-10-13T00:00:00.000Z",
+      dataBase64: shot,
+    });
+    synced.comments.push({
+      id: "comment-1",
+      taskId: "task-1",
+      authorId: "user-1",
+      body: "See this",
+      mentionIds: [],
+      readByIds: [],
+      createdAt: "2026-10-13T00:00:00.000Z",
+      voice: { mimeType: "audio/webm", durationMs: 1200, dataBase64: voice },
+    });
+    const draft = {
+      ...synced,
+      tasks: [{ ...emptyTask(), id: "task-2", title: "Logged while photos were already on the board" }],
+      attachments: [...synced.attachments],
+      comments: [...synced.comments],
+    };
+    const payload = JSON.stringify(snapshotForUpload(draft, synced));
+    expect(payload).not.toContain(shot);
+    expect(payload).not.toContain(voice);
+    expect(payload.length).toBeLessThan(5_000);
+    expect(payload).toContain("Logged while photos were already on the board");
+    expect(payload).toContain('"unchanged":true');
+
+    const restored = buildSnapshot(rehydrateUpload(synced, JSON.parse(payload)));
+    expect(restored.ok).toBe(true);
+    if (!restored.ok) return;
+    expect(restored.snapshot.attachments[0]?.dataBase64).toBe(shot);
+    expect(restored.snapshot.comments[0]?.voice?.dataBase64).toBe(voice);
+    expect(restored.snapshot.tasks.map((task) => task.title)).toContain("Logged while photos were already on the board");
+  });
+
+  it("still sends a screenshot that is new or replaced", () => {
+    const synced = emptySnapshot();
+    synced.attachments.push({
+      id: "file-1",
+      taskId: "task-1",
+      fileName: "old.png",
+      mimeType: "image/png",
+      createdAt: "2026-10-13T00:00:00.000Z",
+      dataBase64: "old-bytes",
+    });
+    const draft = {
+      ...synced,
+      attachments: [
+        { ...synced.attachments[0], dataBase64: "new-bytes" },
+        {
+          id: "file-2",
+          taskId: "task-2",
+          fileName: "added.png",
+          mimeType: "image/png",
+          createdAt: "2026-10-13T00:01:00.000Z",
+          dataBase64: "added-bytes",
+        },
+      ],
+    };
+    const payload = JSON.stringify(snapshotForUpload(draft, synced));
+    expect(payload).toContain("new-bytes");
+    expect(payload).toContain("added-bytes");
+    expect(payload).not.toContain("old-bytes");
+  });
+
+  it("refuses to invent screenshot bytes the server does not have", () => {
+    expect(() =>
+      rehydrateUpload(emptySnapshot(), {
+        attachments: [{ id: "missing", unchanged: true, fileName: "shot.png" }],
+      }),
+    ).toThrow(/screenshot is missing/i);
+  });
+
+  it("keeps file bytes out of the board JSON and skips rewriting unchanged files", () => {
+    const board = emptySnapshot();
+    board.attachments.push({
+      id: "file-1",
+      taskId: "task-1",
+      fileName: "shot.png",
+      mimeType: "image/png",
+      createdAt: "2026-10-13T00:00:00.000Z",
+      dataBase64: "png-bytes",
+    });
+    const stored = collectMedia(board);
+    const stripped = snapshotWithoutMedia(board);
+    expect(stripped.attachments[0]?.dataBase64).toBe("");
+    expect(JSON.stringify(stripped)).not.toContain("png-bytes");
+    const hydrated = hydrateSnapshot(stripped, stored);
+    expect(hydrated.attachments[0]?.dataBase64).toBe("png-bytes");
+    const again = planMediaSync(stored, collectMedia(hydrated));
+    expect(again.upsert).toEqual([]);
+    expect(again.remove).toEqual([]);
+    const removed = planMediaSync(stored, new Map());
+    expect(removed.remove).toEqual(["a:file-1"]);
   });
 });
 

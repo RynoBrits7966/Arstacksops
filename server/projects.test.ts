@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { emptySnapshot } from "../src/storage/snapshot";
+import { emptySnapshot, snapshotForUpload, type Snapshot } from "../src/storage/snapshot";
 import type { Project } from "../src/types";
 import { createApp } from "./app";
 import { clearMailbox, capturedMail } from "./mail";
@@ -248,7 +248,9 @@ describe("project deletion and sign-off", () => {
       body: JSON.stringify({ version: afterRefresh.version, snapshot: forged }),
     });
     expect(edited.status).toBe(200);
-    const editedBody = (await edited.json()) as Board;
+    const editedVersion = ((await edited.json()) as { version: number }).version;
+    const editedBody = (await (await app.request("/api/workspace", { headers: { cookie } })).json()) as Board;
+    expect(editedBody.version).toBe(editedVersion);
     const kept = editedBody.snapshot.projects.find((project) => project.id === "project-keep");
     const created = editedBody.snapshot.projects.find((project) => project.id === "project-new");
     expect(kept?.client).toBe("Updated client");
@@ -275,5 +277,99 @@ describe("project deletion and sign-off", () => {
     expect(finalBoard.snapshot.projects.find((project) => project.id === "project-keep")?.signOff).toBeNull();
     expect(finalBoard.snapshot.projects.map((project) => project.id)).toContain("project-keep");
     expect(finalBoard.snapshot.users.map((user) => user.name)).toEqual(["One Member"]);
+  });
+
+  it("saves a new ticket without resending screenshot bytes", async () => {
+    const { app } = await createApp({ memory: {} });
+    const signedUp = await post(app, "/api/auth/sign-up/email", {
+      name: "One Member",
+      email: "one@arstacks.test",
+      password,
+      callbackURL: "/?verified=1",
+    });
+    expect(signedUp.status).toBe(200);
+    await verifyLatest(app);
+    const cookie = cookieFrom(
+      await post(app, "/api/auth/sign-in/email", { email: "one@arstacks.test", password }),
+    );
+    const opened = (await (await app.request("/api/workspace", { headers: { cookie } })).json()) as Board;
+    const shot = "A".repeat(80_000);
+    const snapshot = emptySnapshot();
+    snapshot.projects.push({
+      id: "project-live",
+      name: "Billing",
+      color: "#3d7ea6",
+      client: "Harbour",
+      deadline: null,
+      createdAt: "2026-10-13T00:00:00.000Z",
+    });
+    snapshot.tasks.push({
+      id: "task-1",
+      projectId: "project-live",
+      assigneeId: "",
+      title: "Already there",
+      description: "",
+      status: "new",
+      createdAt: "2026-10-13T00:00:00.000Z",
+      updatedAt: "2026-10-13T00:00:00.000Z",
+      lastWorkedAt: "2026-10-13T00:00:00.000Z",
+      closedAt: null,
+      ticketNumber: 1,
+      workItemType: "task",
+      parentId: null,
+      order: 0,
+    } as (typeof snapshot.tasks)[number]);
+    snapshot.attachments.push({
+      id: "file-1",
+      taskId: "task-1",
+      fileName: "shot.png",
+      mimeType: "image/png",
+      createdAt: "2026-10-13T00:00:00.000Z",
+      dataBase64: shot,
+    });
+    const seeded = await app.request("/api/workspace", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ version: opened.version, snapshot }),
+    });
+    expect(seeded.status).toBe(200);
+    const seededBody = (await seeded.json()) as { version: number; snapshot?: unknown };
+    expect(JSON.stringify(seededBody)).not.toContain(shot);
+    expect(seededBody.version).toBe(opened.version + 1);
+
+    const stored = (await (await app.request("/api/workspace", { headers: { cookie } })).json()) as {
+      version: number;
+      snapshot: Snapshot;
+    };
+    expect(stored.snapshot.attachments[0]?.dataBase64).toBe(shot);
+    const draft: Snapshot = {
+      ...stored.snapshot,
+      tasks: [
+        ...stored.snapshot.tasks,
+        {
+          ...stored.snapshot.tasks[0],
+          id: "task-2",
+          title: "Logged quickly",
+          ticketNumber: 2,
+          order: 1,
+        },
+      ],
+    };
+    const upload = snapshotForUpload(draft, stored.snapshot);
+    const payload = JSON.stringify({ version: stored.version, snapshot: upload });
+    expect(payload).not.toContain(shot);
+    expect(payload.length).toBeLessThan(20_000);
+    const saved = await app.request("/api/workspace", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie },
+      body: payload,
+    });
+    expect(saved.status).toBe(200);
+    expect(JSON.stringify(await saved.json())).not.toContain(shot);
+    const after = (await (await app.request("/api/workspace", { headers: { cookie } })).json()) as {
+      snapshot: Snapshot;
+    };
+    expect(after.snapshot.tasks.map((task) => task.title).sort()).toEqual(["Already there", "Logged quickly"]);
+    expect(after.snapshot.attachments.map((attachment) => attachment.dataBase64)).toEqual([shot]);
   });
 });

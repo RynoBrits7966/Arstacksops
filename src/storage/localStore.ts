@@ -10,15 +10,18 @@ import {
   planBoardOpen,
   readOfflineCopy,
   writeOfflineCopy,
+  type OfflineCopy,
 } from "./offlineCopy";
 import { readIndexedDb } from "./readIndexedDb";
 import {
   SNAPSHOT_VERSION,
   blobToBase64,
   buildSnapshot,
+  cloneSnapshot,
   emptySnapshot,
   inspectImport,
   rebaseSnapshot,
+  snapshotForUpload,
   toComment,
   type Snapshot,
   type StoredAttachment,
@@ -218,14 +221,30 @@ function keepFlatBackup(raw: string) {
   localStorage.setItem(FLAT_BACKUP_KEY, raw);
 }
 
-async function remember(): Promise<boolean> {
-  if (!cache || !synced) return false;
-  try {
-    await writeOfflineCopy({ version: remoteVersion, synced, draft: cache, dirty });
-    return true;
-  } catch {
-    return false;
-  }
+let rememberChain: Promise<void> = Promise.resolve();
+
+function queueRemember(): Promise<boolean> {
+  if (!cache || !synced) return Promise.resolve(false);
+  const copy: OfflineCopy = {
+    version: remoteVersion,
+    synced,
+    draft: dirty ? cloneSnapshot(cache) : synced,
+    dirty,
+  };
+  let stored = false;
+  const run = rememberChain.then(async () => {
+    try {
+      await writeOfflineCopy(copy);
+      stored = true;
+    } catch {
+      stored = false;
+    }
+  });
+  rememberChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run.then(() => stored);
 }
 
 async function persist(base?: Snapshot) {
@@ -238,9 +257,8 @@ async function persist(base?: Snapshot) {
     }
     return;
   }
-  if (!synced) synced = structuredClone(base ?? cache);
+  if (!synced) synced = cloneSnapshot(base ?? cache!);
   dirty = true;
-  const stored = await remember();
   const origin = synced;
   syncing = true;
   publishSync();
@@ -253,6 +271,7 @@ async function persist(base?: Snapshot) {
     await run;
   } catch (error) {
     if (error instanceof OfflineError) {
+      const stored = await queueRemember();
       if (!stored) throw new Error("Could not store this change on this device. The change was not kept.");
       return;
     }
@@ -296,10 +315,10 @@ async function projectAction(path: string, extra: Record<string, unknown> = {}) 
   const built = buildSnapshot(body?.snapshot);
   if (!built.ok) throw new Error(built.message);
   cache = built.snapshot;
-  synced = structuredClone(built.snapshot);
+  synced = cloneSnapshot(built.snapshot);
   remoteVersion = typeof body?.version === "number" ? body.version : remoteVersion;
   dirty = false;
-  await remember();
+  await queueRemember();
   publishSync();
 }
 
@@ -311,7 +330,7 @@ async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
       method: "PUT",
       credentials: "include",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version: remoteVersion, snapshot: cache }),
+      body: JSON.stringify({ version: remoteVersion, snapshot: snapshotForUpload(cache, synced) }),
     });
   } catch (error) {
     if (isNetworkFailure(error)) throw new OfflineError();
@@ -324,7 +343,7 @@ async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
     synced = latest.snapshot;
     remoteVersion = latest.version;
     dirty = true;
-    await remember();
+    await queueRemember();
     await saveSharedWorkspace(latest.snapshot, 1);
     return;
   }
@@ -332,10 +351,10 @@ async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
     const latest = await fetchWorkspace().catch(() => null);
     if (latest) {
       cache = latest.snapshot;
-      synced = structuredClone(latest.snapshot);
+      synced = cloneSnapshot(latest.snapshot);
       remoteVersion = latest.version;
       dirty = false;
-      await remember();
+      await queueRemember();
     }
     throw new Error("Someone else updated the board. Reload the page and try again.");
   }
@@ -345,9 +364,9 @@ async function saveSharedWorkspace(base: Snapshot, attempt = 0): Promise<void> {
   }
   const saved = (await response.json()) as { version: number };
   remoteVersion = saved.version;
-  synced = structuredClone(cache);
+  synced = cloneSnapshot(cache);
   dirty = false;
-  await remember();
+  void queueRemember();
 }
 
 async function flushShared() {
@@ -359,9 +378,9 @@ async function flushShared() {
       const latest = await fetchWorkspace();
       if (dirty) return;
       cache = latest.snapshot;
-      synced = structuredClone(latest.snapshot);
+      synced = cloneSnapshot(latest.snapshot);
       remoteVersion = latest.version;
-      await writeOfflineCopy({ version: remoteVersion, synced, draft: cache, dirty: false }).catch(() => undefined);
+      await queueRemember();
       return;
     }
     await saveSharedWorkspace(synced ?? cache);
@@ -381,18 +400,19 @@ async function flushShared() {
 
 async function commit<T>(change: (draft: Snapshot) => T): Promise<T> {
   if (!cache) throw new Error("Browser storage is not open");
-  const previous = structuredClone(cache);
+  const previous = cloneSnapshot(cache);
   const previousVersion = remoteVersion;
+  const wasDirty = dirty;
   try {
     const result = change(cache);
     await persist(previous);
     return result;
   } catch (error) {
-    if (remoteVersion === previousVersion) cache = previous;
-    if (usesSharedWorkspace() && synced && cache) {
-      dirty = JSON.stringify(cache) !== JSON.stringify(synced);
-      await remember();
+    if (remoteVersion === previousVersion) {
+      cache = previous;
+      dirty = wasDirty;
     }
+    if (usesSharedWorkspace() && synced && cache) await queueRemember();
     throw error;
   }
 }
@@ -510,10 +530,10 @@ async function loadSharedWorkspace() {
   }
   if (plan.action === "use-remote") {
     cache = plan.snapshot;
-    synced = structuredClone(plan.snapshot);
+    synced = cloneSnapshot(plan.snapshot);
     remoteVersion = plan.version;
     dirty = false;
-    await remember();
+    await queueRemember();
     publishSync();
     watchNetwork();
     return;
@@ -522,7 +542,7 @@ async function loadSharedWorkspace() {
   remoteVersion = plan.version;
   cache = rebaseSnapshot(plan.local.synced, plan.local.draft, plan.snapshot);
   dirty = true;
-  await remember();
+  await queueRemember();
   try {
     await saveSharedWorkspace(synced);
   } catch (error) {
@@ -772,6 +792,74 @@ function removeRelated(draft: Snapshot, ids: Set<string>) {
   draft.attachments = draft.attachments.filter((attachment) => !ids.has(attachment.taskId));
 }
 
+async function encodeScreenshot(file: File): Promise<{ fileName: string; mimeType: string; dataBase64: string }> {
+  const image = file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
+  if (!image) throw new Error("Choose an image file");
+  if (file.size > MAX_IMAGE_BYTES) throw new Error("Screenshots must be 8 MB or smaller");
+  return {
+    fileName: file.name || "screenshot",
+    mimeType: file.type || "application/octet-stream",
+    dataBase64: await blobToBase64(file),
+  };
+}
+
+function insertWorkItem(draft: Snapshot, input: WorkItemInput): Task {
+  const title = input.title.trim();
+  if (!title) throw new Error("Title is required");
+  const dueDate = cleanDue(input.dueDate);
+  if (!draft.projects.some((project) => project.id === input.projectId)) throw new Error("Choose a project");
+  assertAssignee(draft, input.workItemType, input.assigneeId);
+  const id = allocateId(draft, input.workItemType);
+  assertParent(draft, { id, workItemType: input.workItemType, projectId: input.projectId }, input.parentId);
+  const now = new Date().toISOString();
+  const task: Task = {
+    ...blankHierarchy(),
+    id,
+    projectId: input.projectId,
+    assigneeId: input.assigneeId,
+    acceptedAt: null,
+    escalatedToId: null,
+    escalationSeenAt: null,
+    title,
+    description: (input.description ?? "").trim(),
+    status: "new",
+    createdAt: now,
+    updatedAt: now,
+    lastWorkedAt: now,
+    closedAt: null,
+    ticketNumber: nextTicketNumber(draft.tasks, input.projectId),
+    issueType:
+      input.issueType !== undefined
+        ? input.issueType
+        : input.workItemType === "bug"
+          ? "bug"
+          : input.workItemType === "task"
+            ? "improvement"
+            : null,
+    issueSeverity: input.issueSeverity ?? null,
+    platforms: cleanPlatforms(input.platforms),
+    affectedArea: (input.affectedArea ?? "").trim(),
+    detailCategory: input.detailCategory ?? null,
+    workItemType: input.workItemType,
+    parentId: input.parentId,
+    order: nextOrder(draft, input.projectId, input.parentId),
+    tags: cleanTags(input.tags ?? []),
+    priority: input.priority ?? null,
+    dueDate,
+    storyPoints: input.workItemType === "user_story" ? cleanPoints(input.storyPoints) : null,
+    estimateHours: input.workItemType === "task" || input.workItemType === "bug" ? cleanHours(input.estimateHours) : null,
+    acceptanceCriteria: input.workItemType === "user_story" ? (input.acceptanceCriteria ?? "").trim() : "",
+    severity: input.workItemType === "bug" ? (input.severity ?? null) : null,
+    environment: input.workItemType === "bug" ? (input.environment ?? "").trim() : "",
+    stepsToReproduce: input.workItemType === "bug" ? (input.stepsToReproduce ?? "").trim() : "",
+    expectedBehaviour: input.workItemType === "bug" ? (input.expectedBehaviour ?? "").trim() : "",
+    actualBehaviour: input.workItemType === "bug" ? (input.actualBehaviour ?? "").trim() : "",
+  };
+  logActivity(task, input.actorId ?? "", "Created", now);
+  draft.tasks.push(task);
+  return task;
+}
+
 export const taskStore: TaskStore & {
   createWorkItem(input: WorkItemInput): Promise<Task>;
   createIssue(input: {
@@ -788,7 +876,9 @@ export const taskStore: TaskStore & {
     affectedArea?: string;
     detailCategory?: DetailCategory | null;
     actorId?: string;
+    screenshots?: File[];
   }): Promise<Task>;
+  listAllAttachments(): Promise<Attachment[]>;
   updateWorkItem(id: string, patch: WorkItemPatch): Promise<Task>;
   moveWorkItem(id: string, direction: "up" | "down", actorId: string): Promise<void>;
   exportSnapshot(): Promise<string>;
@@ -868,98 +958,46 @@ export const taskStore: TaskStore & {
       parentId: null,
       issueType: "improvement",
     }),
-  createIssue: async (input: {
-    title: string;
-    description: string;
-    projectId: string;
-    assigneeId: string;
-    issueType: IssueType;
-    platforms: Platform[];
-    issueSeverity: IssueSeverity | null;
-    stepsToReproduce?: string;
-    expectedBehaviour?: string;
-    actualBehaviour?: string;
-    affectedArea?: string;
-    detailCategory?: DetailCategory | null;
-    actorId?: string;
-  }) =>
-    taskStore.createWorkItem({
-      workItemType: input.issueType === "bug" ? "bug" : "task",
-      title: input.title,
-      description: input.description,
-      projectId: input.projectId,
-      assigneeId: input.assigneeId,
-      dueDate: null,
-      parentId: null,
-      issueType: input.issueType,
-      platforms: cleanPlatforms(input.platforms),
-      issueSeverity: input.issueSeverity,
-      stepsToReproduce: input.stepsToReproduce,
-      expectedBehaviour: input.expectedBehaviour,
-      actualBehaviour: input.actualBehaviour,
-      affectedArea: input.affectedArea,
-      detailCategory: input.detailCategory ?? null,
-      actorId: input.actorId,
-    }),
-  createWorkItem: async (input) => {
+  createIssue: async (input) => {
+    const shots: Awaited<ReturnType<typeof encodeScreenshot>>[] = [];
+    for (const file of input.screenshots ?? []) shots.push(await encodeScreenshot(file));
     await ensure();
-    const title = input.title.trim();
-    if (!title) throw new Error("Title is required");
-    const dueDate = cleanDue(input.dueDate);
     return commit((draft) => {
-      if (!draft.projects.some((project) => project.id === input.projectId)) throw new Error("Choose a project");
-      assertAssignee(draft, input.workItemType, input.assigneeId);
-      const id = allocateId(draft, input.workItemType);
-      assertParent(draft, { id, workItemType: input.workItemType, projectId: input.projectId }, input.parentId);
-      const now = new Date().toISOString();
-      const task: Task = {
-        ...blankHierarchy(),
-        id,
+      const task = insertWorkItem(draft, {
+        workItemType: input.issueType === "bug" ? "bug" : "task",
+        title: input.title,
+        description: input.description,
         projectId: input.projectId,
         assigneeId: input.assigneeId,
-        acceptedAt: null,
-        escalatedToId: null,
-        escalationSeenAt: null,
-        title,
-        description: (input.description ?? "").trim(),
-        status: "new",
-        createdAt: now,
-        updatedAt: now,
-        lastWorkedAt: now,
-        closedAt: null,
-        ticketNumber: nextTicketNumber(draft.tasks, input.projectId),
-        issueType:
-          input.issueType !== undefined
-            ? input.issueType
-            : input.workItemType === "bug"
-              ? "bug"
-              : input.workItemType === "task"
-                ? "improvement"
-                : null,
-        issueSeverity: input.issueSeverity ?? null,
+        dueDate: null,
+        parentId: null,
+        issueType: input.issueType,
         platforms: cleanPlatforms(input.platforms),
-        affectedArea: (input.affectedArea ?? "").trim(),
+        issueSeverity: input.issueSeverity,
+        stepsToReproduce: input.stepsToReproduce,
+        expectedBehaviour: input.expectedBehaviour,
+        actualBehaviour: input.actualBehaviour,
+        affectedArea: input.affectedArea,
         detailCategory: input.detailCategory ?? null,
-        workItemType: input.workItemType,
-        parentId: input.parentId,
-        order: nextOrder(draft, input.projectId, input.parentId),
-        tags: cleanTags(input.tags ?? []),
-        priority: input.priority ?? null,
-        dueDate,
-        storyPoints: input.workItemType === "user_story" ? cleanPoints(input.storyPoints) : null,
-        estimateHours:
-          input.workItemType === "task" || input.workItemType === "bug" ? cleanHours(input.estimateHours) : null,
-        acceptanceCriteria: input.workItemType === "user_story" ? (input.acceptanceCriteria ?? "").trim() : "",
-        severity: input.workItemType === "bug" ? (input.severity ?? null) : null,
-        environment: input.workItemType === "bug" ? (input.environment ?? "").trim() : "",
-        stepsToReproduce: input.workItemType === "bug" ? (input.stepsToReproduce ?? "").trim() : "",
-        expectedBehaviour: input.workItemType === "bug" ? (input.expectedBehaviour ?? "").trim() : "",
-        actualBehaviour: input.workItemType === "bug" ? (input.actualBehaviour ?? "").trim() : "",
-      };
-      logActivity(task, input.actorId ?? "", "Created", now);
-      draft.tasks.push(task);
+        actorId: input.actorId,
+      });
+      for (const shot of shots) {
+        draft.attachments.push({
+          id: crypto.randomUUID(),
+          taskId: task.id,
+          fileName: shot.fileName,
+          mimeType: shot.mimeType,
+          createdAt: task.createdAt,
+          dataBase64: shot.dataBase64,
+        });
+        logActivity(task, input.actorId ?? "", "Screenshot added", task.createdAt);
+      }
       return cloneTask(task);
     });
+  },
+  createWorkItem: async (input) => {
+    await ensure();
+    return commit((draft) => cloneTask(insertWorkItem(draft, input)));
   },
   updateTask: async (id, patch) => taskStore.updateWorkItem(id, patch),
   updateWorkItem: async (id, patch) => {
@@ -1183,21 +1221,22 @@ export const taskStore: TaskStore & {
       .map(toAttachment)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   },
+  listAllAttachments: async () => {
+    await ensure();
+    return cache!.attachments.map(toAttachment).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  },
   addAttachment: async (taskId, file) => {
     await ensure();
-    const image = file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
-    if (!image) throw new Error("Choose an image file");
-    if (file.size > MAX_IMAGE_BYTES) throw new Error("Screenshots must be 8 MB or smaller");
-    const dataBase64 = await blobToBase64(file);
+    const shot = await encodeScreenshot(file);
     return commit((draft) => {
       const task = requireTask(draft, taskId);
       const attachment: StoredAttachment = {
         id: crypto.randomUUID(),
         taskId,
-        fileName: file.name || "screenshot",
-        mimeType: file.type || "application/octet-stream",
+        fileName: shot.fileName,
+        mimeType: shot.mimeType,
         createdAt: new Date().toISOString(),
-        dataBase64,
+        dataBase64: shot.dataBase64,
       };
       task.updatedAt = attachment.createdAt;
       task.lastWorkedAt = attachment.createdAt;
@@ -1248,7 +1287,7 @@ export const taskStore: TaskStore & {
     await ensure();
     const inspected = inspectImport(json);
     if (!inspected.ok) throw new Error(inspected.errors.join("\n"));
-    const previous = structuredClone(cache!);
+    const previous = cloneSnapshot(cache!);
     try {
       localStorage.setItem(PRE_IMPORT_KEY, JSON.stringify(previous));
     } catch {

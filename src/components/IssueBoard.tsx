@@ -15,6 +15,8 @@ import {
   issueTypeLabel,
 } from "../issues/keys";
 import { ISSUE_COLUMNS, compareIssues, isIssueColumn, type IssueColumn, type IssueSort } from "../issues/sort";
+import { XLSX_MIME, downloadBytes } from "../export/download";
+import { buildScopedWorkbook } from "../export/workbookFile";
 import { archiveNeedsVisit } from "../storage/archive";
 import { taskStore } from "../storage/localStore";
 import { STATUS_LABELS, TAB_NOTES, TAB_ORDER } from "../statuses";
@@ -113,6 +115,8 @@ export function IssueBoard({
   const [filters, setFilters] = useState<StoredFilters>(readFilters);
   const [sort, setSort] = useState<IssueSort | null>(loadSort);
   const [creating, setCreating] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const leaveRef = useRef<IssueLeaveHandle>(null);
 
   async function allowLeave() {
@@ -174,6 +178,24 @@ export function IssueBoard({
   const filtersActive =
     filters.query.trim() !== "" || filters.type !== "all" || filters.severity !== "all" || filters.assignee !== "all";
 
+  async function exportExcel() {
+    setExportError(null);
+    setExporting(true);
+    try {
+      const file = await buildScopedWorkbook({
+        projects,
+        tasks,
+        users,
+        allProjects: projectFilter === "all",
+      });
+      downloadBytes(file.bytes, file.filename, XLSX_MIME);
+    } catch (caught) {
+      setExportError(caught instanceof Error ? caught.message : "Could not export");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="issue-board">
       <div className="board-bar">
@@ -186,10 +208,16 @@ export function IssueBoard({
             type="search"
           />
         </label>
-        <button className="primary" type="button" onClick={() => setCreating(true)}>
-          Create issue
-        </button>
+        <div className="board-actions">
+          <button className="quiet" type="button" onClick={() => void exportExcel()} disabled={exporting}>
+            {exporting ? "Exporting…" : projectFilter === "all" ? "Export all to Excel" : "Export Excel"}
+          </button>
+          <button className="primary" type="button" onClick={() => setCreating(true)}>
+            Create issue
+          </button>
+        </div>
       </div>
+      {exportError ? <p className="form-error count-inline">{exportError}</p> : null}
       <div className="tabs" role="tablist" aria-label="Issue state">
         {TAB_ORDER.map((status) => {
           const count = inProject.filter((task) => task.status === status).length;
@@ -551,17 +579,12 @@ function CreateIssue({
           affectedArea,
           detailCategory: detailCategory || null,
           actorId: currentUserId,
+          screenshots: shots.map((shot) => shot.file),
         });
         id = created.id;
         setCreatedId(id);
-      }
-      const remaining = [...shots];
-      while (remaining.length > 0) {
-        const shot = remaining[0];
-        await taskStore.addAttachment(id, shot.file);
-        URL.revokeObjectURL(shot.url);
-        remaining.shift();
-        setShots([...remaining]);
+        for (const shot of shots) URL.revokeObjectURL(shot.url);
+        setShots([]);
       }
       await onCreated();
     } catch (caught) {
